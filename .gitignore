@@ -1,0 +1,14 @@
+.env
+config.yaml
+venv/
+__pycache__/
+*.pyc
+.pytest_cache/
+.mypy_cache/
+.idea/
+.vscode/
+*.log
+logs/
+data/
+*.csv
+.DS_Store
