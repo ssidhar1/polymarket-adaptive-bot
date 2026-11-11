@@ -1,19 +1,17 @@
-# Polymarket Adaptive Short-Term Filter (ASTF)
+# ASTF — Adaptive Short-Term Filter
 
-**Self-learning, higher-frequency unsupervised bot** for Polymarket 5-minute and 15-minute crypto Up/Down markets (BTC, ETH).
+**Aggressive, self-learning, multi-signal paper trader** for Polymarket 5m / 15m BTC & ETH Up/Down markets.
 
-> **Reality Check**: $1,000 → $150k in 7 months is lottery territory. Most bots on these markets lose money after fees. This system is built for aggressive but controlled edge hunting with hard circuit breakers. **Paper trade extensively first.**
+> **Truth**: No bot is “super duper profitable” by default. Most short-term Polymarket bots lose after fees. This system is designed to hunt real edges (structural + directional) as hard as possible while still having hard circuit breakers. Paper extensively before any real money.
 
-## Current Capabilities
-- Live Gamma scanner for active 5m/15m BTC & ETH Up/Down markets
-- CLOB order books + Binance momentum feed
-- Multi-feature scoring (imbalance, time decay, spread regime, momentum)
-- Adaptive threshold + regime detection
-- Strict risk manager (size, concurrent, daily loss, max drawdown)
-- Paper execution with fees + slippage
-- **Real market resolution checking** via Gamma (closed status + outcome prices)
-- Persistent trade log (`trades.csv`) + daily summary
-- Self-learning loop that receives real outcomes
+## What makes it different
+- **Complete-set arbitrage detector** — buys both sides when Up + Down < 1 after costs (structural edge)
+- **Multi-signal ensemble** — momentum + book imbalance + time decay + spread regime
+- **Kelly-lite position sizing** when a probability estimate exists
+- **Exploration budget** — small controlled degen capital when regime is favorable
+- **Real resolution checking** via Gamma (not simulated forever)
+- **Self-calibrating threshold + regime detection**
+- Fast cycle + persistent trade log
 
 ## Quick Start
 
@@ -22,52 +20,36 @@ git clone https://github.com/ssidhar1/polymarket-adaptive-bot.git
 cd polymarket-adaptive-bot
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
-
 cp config.example.yaml config.yaml
 
-# Scan current markets
 python -m scripts.scan_once
-
-# Run full paper loop
 python -m src.main --mode paper
-
-# Later: daily report
 python -m scripts.daily_report
 ```
 
-## Project Structure
+## Architecture
 ```
-src/
-├── data/
-│   ├── polymarket_client.py   # Gamma scanner + CLOB
-│   ├── features.py
-│   ├── price_feed.py          # External momentum
-│   └── resolution.py          # Real closed-market checker
-├── signals/scorer.py
-├── risk/manager.py
-├── learning/adaptive.py
-├── execution/
-│   ├── paper.py
-│   ├── positions.py
-│   └── live.py                # Skeleton only
-├── utils/
-│   ├── logging.py
-│   └── persistence.py         # trades.csv + daily summary
-└── main.py
+Scanner (Gamma) → Books (CLOB) + Momentum (Binance)
+       ↓
+Features + Ensemble (directional + complete-set arb)
+       ↓
+Kelly-lite / confidence sizing + Risk circuit breakers
+       ↓
+Paper execution → Real resolution → Learner + trades.csv
 ```
 
-## Risk Defaults
-- 5% of bankroll max per position
-- Max 4 concurrent positions
-- 8% daily loss → pause
-- 15% max drawdown → hard pause
-- Minimum edge after fees required to enter
+## Risk (still serious)
+- Max position size, concurrent limits
+- Daily loss limit → pause
+- Max drawdown → hard pause
+- Exploration budget is capped and separate
 
 ## Status
-- **Paper mode**: fully functional end-to-end with real resolution checks and persistent logging
-- **Live mode**: intentionally disabled skeleton — only enable after proven paper edge
+- Paper mode is fully end-to-end and aggressive
+- Live mode remains locked on purpose
+- The only way this becomes highly profitable is if the combination of structural arb + selective directional trades actually has positive expectancy after fees. That must be proven in paper.
 
 ## Disclaimer
-Experimental software. You can (and likely will) lose money if you go live without extensive paper testing. You are fully responsible for any capital used.
+Experimental. You can lose money. Do not deposit capital you cannot afford to lose. Paper first.
 
-MIT License
+MIT
