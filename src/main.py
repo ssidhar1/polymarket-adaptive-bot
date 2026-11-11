@@ -10,9 +10,11 @@ from collections import defaultdict, deque
 from dotenv import load_dotenv
 
 from src.utils.logging import setup_logging
+from src.utils.persistence import TradeLogger
 from src.data.polymarket_client import PolymarketData
 from src.data.features import build_features
 from src.data.price_feed import PriceFeed
+from src.data.resolution import ResolutionChecker
 from src.signals.scorer import SignalScorer
 from src.risk.manager import RiskManager
 from src.learning.adaptive import AdaptiveLearner
@@ -32,15 +34,19 @@ def run_paper(config: dict):
     logger.info("=== ASTF PAPER MODE STARTED ===")
     data = PolymarketData()
     prices = PriceFeed()
+    resolver = ResolutionChecker()
     scorer = SignalScorer(config)
     risk = RiskManager(config, config.get("bankroll", 1000.0))
     learner = AdaptiveLearner(config)
     executor = PaperExecutor()
     tracker = PositionTracker()
+    trade_log = TradeLogger()
 
     assets = config.get("markets", {}).get("targets", ["btc", "eth"])
     cycle = 15
     price_history = defaultdict(lambda: deque(maxlen=12))
+    # Keep last score per order so we can log it on close
+    score_map = {}
 
     logger.info(f"Bankroll ${risk.bankroll:.2f} | assets={assets}")
 
@@ -51,7 +57,6 @@ def run_paper(config: dict):
                 time.sleep(60)
                 continue
 
-            # Update external prices + momentum
             px = prices.get_prices()
             for asset, p in px.items():
                 price_history[asset].append(p)
@@ -59,8 +64,35 @@ def run_paper(config: dict):
             scorer.min_score = learner.get_min_score()
 
             markets = data.get_active_short_term_markets(assets=assets)
+
+            # --- Try to resolve open positions with real market status ---
+            for pos in list(tracker.get_open_list()):
+                closed, up_p, down_p = resolver.check(slug=pos.slug, market_id=pos.market_id)
+                if closed and up_p is not None:
+                    final = resolver.token_final_price(pos.direction, up_p, down_p)
+                    if final is not None:
+                        trade = tracker.resolve(pos.order_id, final)
+                        if trade:
+                            risk.record_pnl(trade["pnl"])
+                            score = score_map.pop(pos.order_id, 0.7)
+                            learner.log_trade({
+                                "score": score,
+                                "direction": trade["direction"],
+                                "entry_price": trade["entry_price"],
+                                "pnl": trade["pnl"],
+                                "features": {},
+                            })
+                            trade_log.log(trade, score=score)
+                            logger.info(f"REAL RESOLVE {pos.direction} → {final:.0f} | pnl=${trade['pnl']:.3f}")
+
             if not markets:
-                logger.info("No matching short-term markets")
+                summary = tracker.summary()
+                daily = trade_log.daily_summary()
+                logger.info(
+                    f"No markets | open={summary['open_count']} | "
+                    f"today trades={daily['trades']} pnl=${daily['pnl']:.2f} | "
+                    f"bankroll=${risk.bankroll:.2f}"
+                )
                 time.sleep(cycle)
                 continue
 
@@ -92,8 +124,8 @@ def run_paper(config: dict):
                 if not risk.can_open(size):
                     continue
 
-                # Avoid opening multiple on same market
-                if any(p.market_id == (m.get("id") or m.get("slug")) for p in tracker.get_open_list()):
+                mid_id = m.get("id") or m.get("slug")
+                if any(p.market_id == mid_id for p in tracker.get_open_list()):
                     continue
 
                 token = up_token if direction == "up" else down_token
@@ -102,7 +134,7 @@ def run_paper(config: dict):
                     side="buy",
                     price=mid,
                     size_usd=size,
-                    market_id=m.get("id") or m.get("slug"),
+                    market_id=mid_id,
                 )
 
                 tracker.add(
@@ -111,39 +143,21 @@ def run_paper(config: dict):
                     slug=m.get("slug", ""),
                     end_date=m.get("endDate") or m.get("end_date_iso"),
                 )
+                score_map[order["order_id"]] = signal["score"]
 
                 logger.info(
                     f"OPEN {direction.upper()} | score={signal['score']:.3f} | "
                     f"mid={mid:.3f} | mom={mom:.2f} | size=${size:.1f} | {m.get('slug','')[:45]}"
                 )
 
-            # Simple resolution simulation for paper:
-            # After ~2-3 cycles we randomly resolve some positions so the learner gets feedback.
-            # In production this would check market closed status + final prices.
-            import random
-            for pos in list(tracker.get_open_list()):
-                age = (time.time() - pos.opened_at.timestamp())
-                if age > 90 and random.random() < 0.35:  # simulate some resolve after ~1.5 min
-                    # Biased toward truth for paper demo; real system uses actual resolution
-                    win_prob = 0.55 if pos.direction == "up" else 0.45  # mild bias for demo
-                    res = 1.0 if random.random() < win_prob else 0.0
-                    trade = tracker.resolve(pos.order_id, res)
-                    if trade:
-                        risk.record_pnl(trade["pnl"])
-                        learner.log_trade({
-                            "score": 0.7,  # would store real score
-                            "direction": trade["direction"],
-                            "entry_price": trade["entry_price"],
-                            "pnl": trade["pnl"],
-                            "features": {},
-                        })
-
             summary = tracker.summary()
+            daily = trade_log.daily_summary()
             logger.info(
                 f"Cycle | mkts={len(markets)} | open={summary['open_count']} | "
-                f"closed={summary['closed_count']} | pnl=${summary['total_pnl']:.2f} | "
-                f"win={summary['win_rate']:.0%} | regime={learner.get_regime()} | "
-                f"min_score={learner.get_min_score():.3f} | bankroll=${risk.bankroll:.2f}"
+                f"closed={summary['closed_count']} | total_pnl=${summary['total_pnl']:.2f} | "
+                f"today={daily['trades']}t ${daily['pnl']:.2f} | "
+                f"regime={learner.get_regime()} | min_score={learner.get_min_score():.3f} | "
+                f"bankroll=${risk.bankroll:.2f}"
             )
 
         except Exception as e:
