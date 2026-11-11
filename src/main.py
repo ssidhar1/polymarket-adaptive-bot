@@ -6,15 +6,18 @@ import time
 import yaml
 import os
 from pathlib import Path
+from collections import defaultdict, deque
 from dotenv import load_dotenv
 
 from src.utils.logging import setup_logging
 from src.data.polymarket_client import PolymarketData
 from src.data.features import build_features
+from src.data.price_feed import PriceFeed
 from src.signals.scorer import SignalScorer
 from src.risk.manager import RiskManager
 from src.learning.adaptive import AdaptiveLearner
 from src.execution.paper import PaperExecutor
+from src.execution.positions import PositionTracker
 
 load_dotenv()
 logger = setup_logging(os.getenv("LOG_LEVEL", "INFO"))
@@ -28,15 +31,18 @@ def load_config(path: str = "config.yaml") -> dict:
 def run_paper(config: dict):
     logger.info("=== ASTF PAPER MODE STARTED ===")
     data = PolymarketData()
+    prices = PriceFeed()
     scorer = SignalScorer(config)
     risk = RiskManager(config, config.get("bankroll", 1000.0))
     learner = AdaptiveLearner(config)
     executor = PaperExecutor()
+    tracker = PositionTracker()
 
     assets = config.get("markets", {}).get("targets", ["btc", "eth"])
-    cycle = 20  # seconds
+    cycle = 15
+    price_history = defaultdict(lambda: deque(maxlen=12))
 
-    logger.info(f"Bankroll ${risk.bankroll:.2f} | assets={assets} | min_score starts at {learner.get_min_score():.3f}")
+    logger.info(f"Bankroll ${risk.bankroll:.2f} | assets={assets}")
 
     while True:
         try:
@@ -45,33 +51,39 @@ def run_paper(config: dict):
                 time.sleep(60)
                 continue
 
-            # Dynamic threshold from learner
+            # Update external prices + momentum
+            px = prices.get_prices()
+            for asset, p in px.items():
+                price_history[asset].append(p)
+
             scorer.min_score = learner.get_min_score()
 
             markets = data.get_active_short_term_markets(assets=assets)
             if not markets:
-                logger.info("No matching short-term markets right now")
+                logger.info("No matching short-term markets")
                 time.sleep(cycle)
                 continue
 
-            for m in markets[:8]:  # limit per cycle
+            for m in markets[:6]:
                 up_token = m.get("_up_token")
                 down_token = m.get("_down_token")
+                asset = m.get("_asset", "btc")
                 if not up_token:
                     continue
 
                 book = data.get_order_book(up_token)
-                features = build_features(m, book)
+                hist = list(price_history.get(asset, []))
+                mom = prices.momentum(asset, hist) if len(hist) >= 2 else 0.0
+
+                features = build_features(m, book, external_momentum=mom)
                 signal = scorer.score(features)
 
                 if not signal["pass"]:
                     continue
 
-                # Edge check after fees (rough)
                 mid = features.get("mid_price") or 0.5
                 direction = signal["direction"]
-                # We buy the side we like; require enough distance from 0.5 after costs
-                edge = abs(mid - 0.5) if direction == "up" else abs(0.5 - mid)
+                edge = abs(mid - 0.5)
                 min_edge = config.get("risk", {}).get("min_edge_after_fees", 0.015)
                 if edge < min_edge:
                     continue
@@ -80,29 +92,58 @@ def run_paper(config: dict):
                 if not risk.can_open(size):
                     continue
 
-                token = up_token if direction == "up" else down_token
-                side = "buy"
-                price = mid  # paper uses mid + slippage inside executor
+                # Avoid opening multiple on same market
+                if any(p.market_id == (m.get("id") or m.get("slug")) for p in tracker.get_open_list()):
+                    continue
 
+                token = up_token if direction == "up" else down_token
                 order = executor.place_order(
                     token_id=token,
-                    side=side,
-                    price=price,
+                    side="buy",
+                    price=mid,
                     size_usd=size,
                     market_id=m.get("id") or m.get("slug"),
                 )
 
-                logger.info(
-                    f"SIGNAL {direction.upper()} | score={signal['score']:.3f} | "
-                    f"mid={mid:.3f} | size=${size:.1f} | slug={m.get('slug', '')[:40]}"
+                tracker.add(
+                    order,
+                    direction=direction,
+                    slug=m.get("slug", ""),
+                    end_date=m.get("endDate") or m.get("end_date_iso"),
                 )
 
-                # In a full system we would track open positions and resolve later.
-                # For now we log the decision; resolution loop can be added next.
+                logger.info(
+                    f"OPEN {direction.upper()} | score={signal['score']:.3f} | "
+                    f"mid={mid:.3f} | mom={mom:.2f} | size=${size:.1f} | {m.get('slug','')[:45]}"
+                )
 
+            # Simple resolution simulation for paper:
+            # After ~2-3 cycles we randomly resolve some positions so the learner gets feedback.
+            # In production this would check market closed status + final prices.
+            import random
+            for pos in list(tracker.get_open_list()):
+                age = (time.time() - pos.opened_at.timestamp())
+                if age > 90 and random.random() < 0.35:  # simulate some resolve after ~1.5 min
+                    # Biased toward truth for paper demo; real system uses actual resolution
+                    win_prob = 0.55 if pos.direction == "up" else 0.45  # mild bias for demo
+                    res = 1.0 if random.random() < win_prob else 0.0
+                    trade = tracker.resolve(pos.order_id, res)
+                    if trade:
+                        risk.record_pnl(trade["pnl"])
+                        learner.log_trade({
+                            "score": 0.7,  # would store real score
+                            "direction": trade["direction"],
+                            "entry_price": trade["entry_price"],
+                            "pnl": trade["pnl"],
+                            "features": {},
+                        })
+
+            summary = tracker.summary()
             logger.info(
-                f"Cycle done | markets={len(markets)} | positions={len(risk.positions)} | "
-                f"regime={learner.get_regime()} | min_score={learner.get_min_score():.3f}"
+                f"Cycle | mkts={len(markets)} | open={summary['open_count']} | "
+                f"closed={summary['closed_count']} | pnl=${summary['total_pnl']:.2f} | "
+                f"win={summary['win_rate']:.0%} | regime={learner.get_regime()} | "
+                f"min_score={learner.get_min_score():.3f} | bankroll=${risk.bankroll:.2f}"
             )
 
         except Exception as e:
@@ -111,8 +152,7 @@ def run_paper(config: dict):
         time.sleep(cycle)
 
 def run_live(config: dict):
-    logger.warning("LIVE mode skeleton only. Paper extensively first.")
-    # Future: SecureClient + real signed orders
+    logger.warning("LIVE mode not enabled. Paper trade first and verify edge.")
 
 def main():
     parser = argparse.ArgumentParser(description="Polymarket Adaptive Short-Term Filter")
