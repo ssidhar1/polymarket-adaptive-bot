@@ -1,10 +1,5 @@
 """
 Advanced signal ensemble + structural edge detectors.
-
-- Multi-feature directional score
-- Complete-set arbitrage (Up + Down < 1.0 after costs)
-- Liquidity / depth filter
-- Simple calibrated probability estimate
 """
 from typing import Dict, Optional
 import numpy as np
@@ -19,6 +14,7 @@ class EnsembleSignal:
         self.min_edge = config.get("risk", {}).get("min_edge_after_fees", 0.015)
         self.fee_buffer = 0.02
         self.min_depth_usd = config.get("signals", {}).get("min_depth_usd", 50.0)
+        self.min_time_remaining = config.get("signals", {}).get("min_time_remaining_pct", 0.08)
 
     def complete_set_arb(self, up_mid: float, down_mid: float) -> Optional[Dict]:
         if up_mid is None or down_mid is None:
@@ -46,23 +42,20 @@ class EnsembleSignal:
         time_left = float(features.get("time_remaining_pct", 0.5) or 0.5)
         vol = features.get("volatility_regime", "normal")
         mid = features.get("mid_price")
-        if mid is None:
-            mid = 0.5
-        mid = float(mid)
+        mid = 0.5 if mid is None else float(mid)
         spread = float(features.get("spread", 0.02) or 0.02)
         depth = float(features.get("depth_usd", 0.0) or 0.0)
 
-        # Thin book → reject
         if depth < self.min_depth_usd:
-            return {
-                "type": "directional",
-                "score": 0.0,
-                "direction": "up",
-                "est_prob": 0.5,
-                "pass": False,
-                "reason": "thin_book",
-                "components": {},
-            }
+            return self._reject("thin_book")
+
+        # Too close to expiry → noisy / hard to get filled fairly in paper model
+        if time_left < self.min_time_remaining:
+            return self._reject("near_expiry")
+
+        # Extreme mids rarely have edge after fees
+        if mid < 0.08 or mid > 0.92:
+            return self._reject("extreme_mid")
 
         raw = (
             0.38 * mom
@@ -82,13 +75,10 @@ class EnsembleSignal:
         score = float(np.clip(raw, 0.0, 1.0))
         direction = "up" if (mom + imb) >= 0 else "down"
 
-        # Map score toward a soft probability (proxy only)
-        est_prob = 0.5 + (score - 0.5) * 0.7
+        # est_prob is P(chosen side wins), rough proxy from score strength
+        strength = abs(score - 0.5) * 1.4
+        est_prob = 0.5 + strength
         est_prob = float(np.clip(est_prob, 0.05, 0.95))
-        if direction == "down":
-            # est_prob is P(up-like strength); invert for down side pricing vs mid of UP token
-            # When we buy down, we care about P(down). Keep est_prob as confidence on chosen side.
-            pass
 
         return {
             "type": "directional",
@@ -104,6 +94,17 @@ class EnsembleSignal:
                 "spread": spread,
                 "depth": depth,
             },
+        }
+
+    def _reject(self, reason: str) -> Dict:
+        return {
+            "type": "directional",
+            "score": 0.0,
+            "direction": "up",
+            "est_prob": 0.5,
+            "pass": False,
+            "reason": reason,
+            "components": {},
         }
 
     def evaluate(
