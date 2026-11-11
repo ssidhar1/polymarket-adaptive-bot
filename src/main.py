@@ -49,7 +49,6 @@ def run_paper(config: dict):
     cycle = 12
     price_history = defaultdict(lambda: deque(maxlen=20))
     score_map = {}
-    # market_id -> last trade timestamp (cooldown)
     cooldown_until = {}
     cooldown_sec = 90
 
@@ -69,9 +68,10 @@ def run_paper(config: dict):
 
             ensemble.min_score = learner.get_min_score()
 
-            # --- Resolve open positions ---
             for pos in list(tracker.get_open_list()):
-                closed, up_p, down_p = resolver.check(slug=pos.slug or None, market_id=pos.market_id or None)
+                closed, up_p, down_p = resolver.check(
+                    slug=pos.slug or None, market_id=pos.market_id or None
+                )
                 if closed and up_p is not None:
                     final = resolver.token_final_price(pos.direction, up_p, down_p)
                     if final is not None:
@@ -87,12 +87,13 @@ def run_paper(config: dict):
                                 "features": {},
                             })
                             trade_log.log(trade, score=score)
-                            logger.info(f"RESOLVED {pos.direction.upper()} → {final:.0f} | pnl=${trade['pnl']:.3f}")
+                            logger.info(
+                                f"RESOLVED {pos.direction.upper()} → {final:.0f} | pnl=${trade['pnl']:.3f}"
+                            )
                         continue
 
-                # Force flat stale positions (avoid zombie inventory)
                 if tracker.is_stale(pos):
-                    trade = tracker.resolve(pos.order_id, 0.5)  # neutral exit assumption
+                    trade = tracker.resolve(pos.order_id, 0.5)
                     if trade:
                         risk.record_pnl(trade["pnl"])
                         score = score_map.pop(pos.order_id, 0.5)
@@ -104,7 +105,9 @@ def run_paper(config: dict):
                             "features": {},
                         })
                         trade_log.log(trade, score=score)
-                        logger.warning(f"STALE EXIT {pos.direction} @ 0.5 | pnl=${trade['pnl']:.3f}")
+                        logger.warning(
+                            f"STALE EXIT {pos.direction} @ 0.5 | pnl=${trade['pnl']:.3f}"
+                        )
 
             markets = data.get_active_short_term_markets(assets=assets)
             open_n = tracker.open_count()
@@ -130,7 +133,6 @@ def run_paper(config: dict):
                 if not mid_id:
                     continue
 
-                # Cooldown / already open
                 if cooldown_until.get(mid_id, 0) > now:
                     continue
                 if any(p.market_id == mid_id for p in tracker.get_open_list()):
@@ -142,15 +144,14 @@ def run_paper(config: dict):
                 down_mid = book_down.get("mid")
 
                 hist = list(price_history.get(asset, []))
-                mom = prices.momentum(asset, hist) if len(hist) >= 2 else 0.0
+                mtf = prices.multi_timeframe_momentum(asset)
+                mom = prices.momentum(asset, hist)
 
                 features = build_features(m, book_up, external_momentum=mom)
                 signal = ensemble.evaluate(features, up_mid=up_mid, down_mid=down_mid)
 
-                # --- Complete-set arb ---
                 if signal.get("type") == "complete_set":
                     size = risk.size_position(signal["score"], is_exploration=False)
-                    # Need room for two legs
                     if not risk.can_open(size, open_count=open_n):
                         continue
                     if not risk.can_open(size, open_count=open_n + 1):
@@ -174,17 +175,18 @@ def run_paper(config: dict):
                     )
                     continue
 
-                # --- Directional ---
                 is_expl = False
                 if not signal.get("pass"):
-                    if learner.get_regime() == "favorable" and signal.get("score", 0) > ensemble.min_score - 0.08:
+                    if (
+                        learner.get_regime() == "favorable"
+                        and signal.get("score", 0) > ensemble.min_score - 0.08
+                    ):
                         is_expl = True
                     else:
                         continue
 
                 direction = signal["direction"]
                 mid = features.get("mid_price") or 0.5
-                # When buying down token, price is down_mid if available
                 if direction == "down" and down_mid is not None:
                     mid = down_mid
                 elif direction == "up" and up_mid is not None:
@@ -217,7 +219,9 @@ def run_paper(config: dict):
                 tag = "EXPL" if is_expl else "DIR"
                 logger.info(
                     f"{tag} {direction.upper()} | score={signal['score']:.3f} | "
-                    f"mid={mid:.3f} | mom={mom:.2f} | size=${size:.1f} | {m.get('slug','')[:40]}"
+                    f"mid={mid:.3f} | mom={mom:.2f} "
+                    f"(1m={mtf['m1']:.2f} 5m={mtf['m5']:.2f} 15m={mtf['m15']:.2f}) | "
+                    f"size=${size:.1f} | {m.get('slug','')[:40]}"
                 )
 
             summary = tracker.summary()
@@ -241,7 +245,9 @@ def run_live(config: dict):
 
 def main():
     parser = argparse.ArgumentParser(description="ASTF — Adaptive Short-Term Filter")
-    parser.add_argument("--mode", choices=["paper", "live"], default=os.getenv("DEFAULT_MODE", "paper"))
+    parser.add_argument(
+        "--mode", choices=["paper", "live"], default=os.getenv("DEFAULT_MODE", "paper")
+    )
     parser.add_argument("--config", default="config.yaml")
     args = parser.parse_args()
     config = load_config(args.config)
