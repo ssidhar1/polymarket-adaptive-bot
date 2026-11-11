@@ -1,0 +1,29 @@
+bankroll: 1000.0
+
+risk:
+  max_position_pct: 0.05          # 5% of bankroll per market
+  max_concurrent: 4
+  daily_loss_limit_pct: 0.08      # pause if down 8% in a day
+  max_drawdown_pct: 0.15          # hard pause
+  min_edge_after_fees: 0.015      # require at least 1.5 cents edge
+
+markets:
+  targets:
+    - "btc"
+    - "eth"
+  windows:
+    - "5m"
+    - "15m"
+
+signals:
+  min_score: 0.62                 # adaptive, this is starting value
+  lookback_minutes: 30
+
+learning:
+  calibration_window: 200         # trades to use for adaptation
+  regime_lookback: 50
+  exploration_pct: 0.05           # small % of capital for exploration
+
+execution:
+  prefer_maker: true
+  max_slippage_bps: 30
