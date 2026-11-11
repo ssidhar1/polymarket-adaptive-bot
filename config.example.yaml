@@ -1,11 +1,11 @@
 bankroll: 1000.0
 
 risk:
-  max_position_pct: 0.06          # slightly more aggressive
-  max_concurrent: 5
-  daily_loss_limit_pct: 0.09
-  max_drawdown_pct: 0.18
-  min_edge_after_fees: 0.012
+  max_position_pct: 0.05
+  max_concurrent: 4
+  daily_loss_limit_pct: 0.08
+  max_drawdown_pct: 0.15
+  min_edge_after_fees: 0.015
 
 markets:
   targets:
@@ -16,13 +16,14 @@ markets:
     - "15m"
 
 signals:
-  min_score: 0.60                 # starting threshold (adaptive)
+  min_score: 0.62
   lookback_minutes: 30
+  min_depth_usd: 50.0          # skip thin books
 
 learning:
   calibration_window: 150
   regime_lookback: 40
-  exploration_pct: 0.07           # small degen exploration budget
+  exploration_pct: 0.05
 
 execution:
   prefer_maker: true
