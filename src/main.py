@@ -1,6 +1,6 @@
 """
 ASTF — Adaptive Short-Term Filter
-Aggressive, self-learning, multi-signal paper trader for Polymarket 5m/15m crypto markets.
+Self-learning multi-signal paper trader for Polymarket 5m/15m crypto markets.
 """
 import argparse
 import time
@@ -25,14 +25,16 @@ from src.execution.positions import PositionTracker
 load_dotenv()
 logger = setup_logging(os.getenv("LOG_LEVEL", "INFO"))
 
+
 def load_config(path: str = "config.yaml") -> dict:
     if not Path(path).exists():
         path = "config.example.yaml"
     with open(path) as f:
         return yaml.safe_load(f)
 
+
 def run_paper(config: dict):
-    logger.info("=== ASTF PAPER MODE — aggressive adaptive mode ===")
+    logger.info("=== ASTF PAPER MODE ===")
     data = PolymarketData()
     prices = PriceFeed()
     resolver = ResolutionChecker()
@@ -44,11 +46,14 @@ def run_paper(config: dict):
     trade_log = TradeLogger()
 
     assets = config.get("markets", {}).get("targets", ["btc", "eth"])
-    cycle = 12  # faster cycle
+    cycle = 12
     price_history = defaultdict(lambda: deque(maxlen=20))
     score_map = {}
+    # market_id -> last trade timestamp (cooldown)
+    cooldown_until = {}
+    cooldown_sec = 90
 
-    logger.info(f"Bankroll ${risk.bankroll:.2f} | assets={assets} | min_score={learner.get_min_score():.3f}")
+    logger.info(f"Bankroll ${risk.bankroll:.2f} | assets={assets}")
 
     while True:
         try:
@@ -57,18 +62,16 @@ def run_paper(config: dict):
                 time.sleep(45)
                 continue
 
-            # Momentum feed
+            now = time.time()
             px = prices.get_prices()
             for asset, p in px.items():
                 price_history[asset].append(p)
 
             ensemble.min_score = learner.get_min_score()
 
-            markets = data.get_active_short_term_markets(assets=assets)
-
-            # Real resolution
+            # --- Resolve open positions ---
             for pos in list(tracker.get_open_list()):
-                closed, up_p, down_p = resolver.check(slug=pos.slug, market_id=pos.market_id)
+                closed, up_p, down_p = resolver.check(slug=pos.slug or None, market_id=pos.market_id or None)
                 if closed and up_p is not None:
                     final = resolver.token_final_price(pos.direction, up_p, down_p)
                     if final is not None:
@@ -85,13 +88,33 @@ def run_paper(config: dict):
                             })
                             trade_log.log(trade, score=score)
                             logger.info(f"RESOLVED {pos.direction.upper()} → {final:.0f} | pnl=${trade['pnl']:.3f}")
+                        continue
+
+                # Force flat stale positions (avoid zombie inventory)
+                if tracker.is_stale(pos):
+                    trade = tracker.resolve(pos.order_id, 0.5)  # neutral exit assumption
+                    if trade:
+                        risk.record_pnl(trade["pnl"])
+                        score = score_map.pop(pos.order_id, 0.5)
+                        learner.log_trade({
+                            "score": score,
+                            "direction": trade["direction"],
+                            "entry_price": trade["entry_price"],
+                            "pnl": trade["pnl"],
+                            "features": {},
+                        })
+                        trade_log.log(trade, score=score)
+                        logger.warning(f"STALE EXIT {pos.direction} @ 0.5 | pnl=${trade['pnl']:.3f}")
+
+            markets = data.get_active_short_term_markets(assets=assets)
+            open_n = tracker.open_count()
 
             if not markets:
                 summary = tracker.summary()
                 daily = trade_log.daily_summary()
                 logger.info(
-                    f"No active markets | open={summary['open_count']} | "
-                    f"today {daily['trades']}t ${daily['pnl']:.2f} | bankroll=${risk.bankroll:.2f}"
+                    f"No markets | open={summary['open_count']} | "
+                    f"today {daily['trades']}t ${daily['pnl']:.2f} | bank=${risk.bankroll:.2f}"
                 )
                 time.sleep(cycle)
                 continue
@@ -101,6 +124,16 @@ def run_paper(config: dict):
                 down_token = m.get("_down_token")
                 asset = m.get("_asset", "btc")
                 if not up_token or not down_token:
+                    continue
+
+                mid_id = str(m.get("id") or m.get("slug") or "")
+                if not mid_id:
+                    continue
+
+                # Cooldown / already open
+                if cooldown_until.get(mid_id, 0) > now:
+                    continue
+                if any(p.market_id == mid_id for p in tracker.get_open_list()):
                     continue
 
                 book_up = data.get_order_book(up_token)
@@ -114,61 +147,77 @@ def run_paper(config: dict):
                 features = build_features(m, book_up, external_momentum=mom)
                 signal = ensemble.evaluate(features, up_mid=up_mid, down_mid=down_mid)
 
-                mid_id = m.get("id") or m.get("slug")
-                if any(p.market_id == mid_id for p in tracker.get_open_list()):
-                    continue
-
-                # --- Complete-set arbitrage path ---
+                # --- Complete-set arb ---
                 if signal.get("type") == "complete_set":
                     size = risk.size_position(signal["score"], is_exploration=False)
-                    if not risk.can_open(size * 2):
+                    # Need room for two legs
+                    if not risk.can_open(size, open_count=open_n):
                         continue
-                    # Paper buy both sides
-                    for side, token, price in [("up", up_token, signal["up_price"]), ("down", down_token, signal["down_price"])]:
-                        half = size
-                        order = executor.place_order(token, "buy", price, half, mid_id)
-                        tracker.add(order, direction=side, slug=m.get("slug", ""),
-                                    end_date=m.get("endDate") or m.get("end_date_iso"))
+                    if not risk.can_open(size, open_count=open_n + 1):
+                        continue
+                    for side, token, price in [
+                        ("up", up_token, signal["up_price"]),
+                        ("down", down_token, signal["down_price"]),
+                    ]:
+                        order = executor.place_order(token, "buy", price, size, mid_id)
+                        tracker.add(
+                            order,
+                            direction=side,
+                            slug=m.get("slug", ""),
+                            end_date=m.get("endDate") or m.get("end_date_iso"),
+                        )
                         score_map[order["order_id"]] = signal["score"]
-                    logger.info(f"ARB COMPLETE-SET | edge={signal['edge']:.3f} | size=${size:.1f} | {m.get('slug','')[:40]}")
+                        open_n += 1
+                    cooldown_until[mid_id] = now + cooldown_sec
+                    logger.info(
+                        f"ARB SET | edge={signal['edge']:.3f} | size=${size:.1f} | {m.get('slug','')[:40]}"
+                    )
                     continue
 
-                # --- Directional path ---
+                # --- Directional ---
+                is_expl = False
                 if not signal.get("pass"):
-                    # Exploration: occasionally take marginal signals in favorable regime
-                    if learner.get_regime() == "favorable" and signal["score"] > ensemble.min_score - 0.08:
+                    if learner.get_regime() == "favorable" and signal.get("score", 0) > ensemble.min_score - 0.08:
                         is_expl = True
                     else:
                         continue
-                else:
-                    is_expl = False
 
                 direction = signal["direction"]
                 mid = features.get("mid_price") or 0.5
-                est_prob = signal.get("est_prob")
+                # When buying down token, price is down_mid if available
+                if direction == "down" and down_mid is not None:
+                    mid = down_mid
+                elif direction == "up" and up_mid is not None:
+                    mid = up_mid
 
+                est_prob = signal.get("est_prob")
                 size = risk.size_position(
                     confidence=signal["score"],
                     est_prob=est_prob,
                     price=mid,
                     is_exploration=is_expl,
                 )
-                if not risk.can_open(size):
+                if size <= 0 or not risk.can_open(size, open_count=open_n):
                     continue
 
                 token = up_token if direction == "up" else down_token
                 order = executor.place_order(token, "buy", mid, size, mid_id)
-                tracker.add(order, direction=direction, slug=m.get("slug", ""),
-                            end_date=m.get("endDate") or m.get("end_date_iso"))
+                tracker.add(
+                    order,
+                    direction=direction,
+                    slug=m.get("slug", ""),
+                    end_date=m.get("endDate") or m.get("end_date_iso"),
+                )
                 score_map[order["order_id"]] = signal["score"]
+                open_n += 1
+                cooldown_until[mid_id] = now + cooldown_sec
                 if is_expl:
                     risk.record_exploration(size)
 
                 tag = "EXPL" if is_expl else "DIR"
                 logger.info(
                     f"{tag} {direction.upper()} | score={signal['score']:.3f} | "
-                    f"prob≈{est_prob:.2f} | mid={mid:.3f} | mom={mom:.2f} | "
-                    f"size=${size:.1f} | {m.get('slug','')[:40]}"
+                    f"mid={mid:.3f} | mom={mom:.2f} | size=${size:.1f} | {m.get('slug','')[:40]}"
                 )
 
             summary = tracker.summary()
@@ -185,8 +234,10 @@ def run_paper(config: dict):
 
         time.sleep(cycle)
 
+
 def run_live(config: dict):
     logger.warning("LIVE mode locked. Prove edge in paper first.")
+
 
 def main():
     parser = argparse.ArgumentParser(description="ASTF — Adaptive Short-Term Filter")
@@ -198,6 +249,7 @@ def main():
         run_paper(config)
     else:
         run_live(config)
+
 
 if __name__ == "__main__":
     main()
