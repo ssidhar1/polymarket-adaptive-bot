@@ -13,4 +13,5 @@ data/
 *.csv
 *.db
 trades.db
+runtime_state.json
 .DS_Store
