@@ -1,11 +1,11 @@
 bankroll: 1000.0
 
 risk:
-  max_position_pct: 0.05          # 5% of bankroll per market
-  max_concurrent: 4
-  daily_loss_limit_pct: 0.08      # pause if down 8% in a day
-  max_drawdown_pct: 0.15          # hard pause
-  min_edge_after_fees: 0.015      # require at least 1.5 cents edge
+  max_position_pct: 0.06          # slightly more aggressive
+  max_concurrent: 5
+  daily_loss_limit_pct: 0.09
+  max_drawdown_pct: 0.18
+  min_edge_after_fees: 0.012
 
 markets:
   targets:
@@ -16,14 +16,14 @@ markets:
     - "15m"
 
 signals:
-  min_score: 0.62                 # adaptive, this is starting value
+  min_score: 0.60                 # starting threshold (adaptive)
   lookback_minutes: 30
 
 learning:
-  calibration_window: 200         # trades to use for adaptation
-  regime_lookback: 50
-  exploration_pct: 0.05           # small % of capital for exploration
+  calibration_window: 150
+  regime_lookback: 40
+  exploration_pct: 0.07           # small degen exploration budget
 
 execution:
   prefer_maker: true
-  max_slippage_bps: 30
+  max_slippage_bps: 25
