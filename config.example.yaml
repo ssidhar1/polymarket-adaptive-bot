@@ -18,7 +18,8 @@ markets:
 signals:
   min_score: 0.62
   lookback_minutes: 30
-  min_depth_usd: 50.0          # skip thin books
+  min_depth_usd: 50.0
+  min_time_remaining_pct: 0.08   # skip if almost expired
 
 learning:
   calibration_window: 150
@@ -28,3 +29,5 @@ learning:
 execution:
   prefer_maker: true
   max_slippage_bps: 25
+  cycle_seconds: 12
+  cooldown_seconds: 90
