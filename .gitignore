@@ -11,4 +11,6 @@ __pycache__/
 logs/
 data/
 *.csv
+*.db
+trades.db
 .DS_Store
