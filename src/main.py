@@ -3,6 +3,7 @@ ASTF — Adaptive Short-Term Filter
 Self-learning multi-signal paper trader for Polymarket 5m/15m crypto markets.
 """
 import argparse
+import signal
 import time
 import yaml
 import os
@@ -12,6 +13,7 @@ from dotenv import load_dotenv
 
 from src.utils.logging import setup_logging
 from src.utils.persistence import TradeLogger
+from src.utils.state import StateStore
 from src.data.polymarket_client import PolymarketData
 from src.data.features import build_features
 from src.data.price_feed import PriceFeed
@@ -25,6 +27,14 @@ from src.execution.positions import PositionTracker
 load_dotenv()
 logger = setup_logging(os.getenv("LOG_LEVEL", "INFO"))
 
+_shutdown = False
+
+
+def _handle_signal(signum, frame):
+    global _shutdown
+    logger.info(f"Shutdown signal received ({signum}) — finishing cycle...")
+    _shutdown = True
+
 
 def load_config(path: str = "config.yaml") -> dict:
     if not Path(path).exists():
@@ -34,27 +44,44 @@ def load_config(path: str = "config.yaml") -> dict:
 
 
 def run_paper(config: dict):
+    global _shutdown
+    signal.signal(signal.SIGINT, _handle_signal)
+    signal.signal(signal.SIGTERM, _handle_signal)
+
     logger.info("=== ASTF PAPER MODE ===")
     data = PolymarketData()
     prices = PriceFeed()
     resolver = ResolutionChecker()
     ensemble = EnsembleSignal(config)
-    risk = RiskManager(config, config.get("bankroll", 1000.0))
+    state = StateStore()
+    saved = state.load()
+
+    start_bank = float(saved.get("bankroll", config.get("bankroll", 1000.0)))
+    risk = RiskManager(config, start_bank)
+    if saved.get("peak_bankroll"):
+        risk.peak_bankroll = float(saved["peak_bankroll"])
+
     learner = AdaptiveLearner(config)
+    learner.import_state(saved.get("learner") or {})
+
     executor = PaperExecutor()
     tracker = PositionTracker()
     trade_log = TradeLogger()
 
     assets = config.get("markets", {}).get("targets", ["btc", "eth"])
-    cycle = 12
+    cycle = int(config.get("execution", {}).get("cycle_seconds", 12))
     price_history = defaultdict(lambda: deque(maxlen=20))
     score_map = {}
     cooldown_until = {}
-    cooldown_sec = 90
+    cooldown_sec = int(config.get("execution", {}).get("cooldown_seconds", 90))
+    cycles_since_save = 0
 
-    logger.info(f"Bankroll ${risk.bankroll:.2f} | assets={assets}")
+    logger.info(
+        f"Bankroll ${risk.bankroll:.2f} | assets={assets} | "
+        f"min_score={learner.get_min_score():.3f} | regime={learner.get_regime()}"
+    )
 
-    while True:
+    while not _shutdown:
         try:
             if risk.paused:
                 logger.warning(f"PAUSED: {risk.pause_reason}")
@@ -84,7 +111,7 @@ def run_paper(config: dict):
                                 "direction": trade["direction"],
                                 "entry_price": trade["entry_price"],
                                 "pnl": trade["pnl"],
-                                "features": {},
+                                "stale": False,
                             })
                             trade_log.log(trade, score=score)
                             logger.info(
@@ -102,7 +129,7 @@ def run_paper(config: dict):
                             "direction": trade["direction"],
                             "entry_price": trade["entry_price"],
                             "pnl": trade["pnl"],
-                            "features": {},
+                            "stale": True,
                         })
                         trade_log.log(trade, score=score)
                         logger.warning(
@@ -119,124 +146,141 @@ def run_paper(config: dict):
                     f"No markets | open={summary['open_count']} | "
                     f"today {daily['trades']}t ${daily['pnl']:.2f} | bank=${risk.bankroll:.2f}"
                 )
-                time.sleep(cycle)
-                continue
-
-            for m in markets[:8]:
-                up_token = m.get("_up_token")
-                down_token = m.get("_down_token")
-                asset = m.get("_asset", "btc")
-                if not up_token or not down_token:
-                    continue
-
-                mid_id = str(m.get("id") or m.get("slug") or "")
-                if not mid_id:
-                    continue
-
-                if cooldown_until.get(mid_id, 0) > now:
-                    continue
-                if any(p.market_id == mid_id for p in tracker.get_open_list()):
-                    continue
-
-                book_up = data.get_order_book(up_token)
-                book_down = data.get_order_book(down_token)
-                up_mid = book_up.get("mid")
-                down_mid = book_down.get("mid")
-
-                hist = list(price_history.get(asset, []))
-                mtf = prices.multi_timeframe_momentum(asset)
-                mom = prices.momentum(asset, hist)
-
-                features = build_features(m, book_up, external_momentum=mom)
-                signal = ensemble.evaluate(features, up_mid=up_mid, down_mid=down_mid)
-
-                if signal.get("type") == "complete_set":
-                    size = risk.size_position(signal["score"], is_exploration=False)
-                    if not risk.can_open(size, open_count=open_n):
+            else:
+                for m in markets[:8]:
+                    up_token = m.get("_up_token")
+                    down_token = m.get("_down_token")
+                    asset = m.get("_asset", "btc")
+                    if not up_token or not down_token:
                         continue
-                    if not risk.can_open(size, open_count=open_n + 1):
+
+                    mid_id = str(m.get("id") or m.get("slug") or "")
+                    if not mid_id:
                         continue
-                    for side, token, price in [
-                        ("up", up_token, signal["up_price"]),
-                        ("down", down_token, signal["down_price"]),
-                    ]:
-                        order = executor.place_order(token, "buy", price, size, mid_id)
-                        tracker.add(
-                            order,
-                            direction=side,
-                            slug=m.get("slug", ""),
-                            end_date=m.get("endDate") or m.get("end_date_iso"),
+
+                    if cooldown_until.get(mid_id, 0) > now:
+                        continue
+                    if any(p.market_id == mid_id for p in tracker.get_open_list()):
+                        continue
+
+                    book_up = data.get_order_book(up_token)
+                    book_down = data.get_order_book(down_token)
+                    up_mid = book_up.get("mid")
+                    down_mid = book_down.get("mid")
+
+                    hist = list(price_history.get(asset, []))
+                    mtf = prices.multi_timeframe_momentum(asset)
+                    mom = prices.momentum(asset, hist)
+
+                    features = build_features(m, book_up, external_momentum=mom)
+                    signal = ensemble.evaluate(features, up_mid=up_mid, down_mid=down_mid)
+
+                    if signal.get("type") == "complete_set":
+                        size = risk.size_position(signal["score"], is_exploration=False)
+                        if not risk.can_open(size, open_count=open_n):
+                            continue
+                        if not risk.can_open(size, open_count=open_n + 1):
+                            continue
+                        for side, token, price in [
+                            ("up", up_token, signal["up_price"]),
+                            ("down", down_token, signal["down_price"]),
+                        ]:
+                            order = executor.place_order(token, "buy", price, size, mid_id)
+                            tracker.add(
+                                order,
+                                direction=side,
+                                slug=m.get("slug", ""),
+                                end_date=m.get("endDate") or m.get("end_date_iso"),
+                            )
+                            score_map[order["order_id"]] = signal["score"]
+                            open_n += 1
+                        cooldown_until[mid_id] = now + cooldown_sec
+                        logger.info(
+                            f"ARB SET | edge={signal['edge']:.3f} | size=${size:.1f} | {m.get('slug','')[:40]}"
                         )
-                        score_map[order["order_id"]] = signal["score"]
-                        open_n += 1
-                    cooldown_until[mid_id] = now + cooldown_sec
-                    logger.info(
-                        f"ARB SET | edge={signal['edge']:.3f} | size=${size:.1f} | {m.get('slug','')[:40]}"
-                    )
-                    continue
-
-                is_expl = False
-                if not signal.get("pass"):
-                    if (
-                        learner.get_regime() == "favorable"
-                        and signal.get("score", 0) > ensemble.min_score - 0.08
-                    ):
-                        is_expl = True
-                    else:
                         continue
 
-                direction = signal["direction"]
-                mid = features.get("mid_price") or 0.5
-                if direction == "down" and down_mid is not None:
-                    mid = down_mid
-                elif direction == "up" and up_mid is not None:
-                    mid = up_mid
+                    is_expl = False
+                    if not signal.get("pass"):
+                        if (
+                            learner.get_regime() == "favorable"
+                            and signal.get("score", 0) > ensemble.min_score - 0.08
+                        ):
+                            is_expl = True
+                        else:
+                            continue
 
-                est_prob = signal.get("est_prob")
-                size = risk.size_position(
-                    confidence=signal["score"],
-                    est_prob=est_prob,
-                    price=mid,
-                    is_exploration=is_expl,
-                )
-                if size <= 0 or not risk.can_open(size, open_count=open_n):
-                    continue
+                    direction = signal["direction"]
+                    mid = features.get("mid_price") or 0.5
+                    if direction == "down" and down_mid is not None:
+                        mid = down_mid
+                    elif direction == "up" and up_mid is not None:
+                        mid = up_mid
 
-                token = up_token if direction == "up" else down_token
-                order = executor.place_order(token, "buy", mid, size, mid_id)
-                tracker.add(
-                    order,
-                    direction=direction,
-                    slug=m.get("slug", ""),
-                    end_date=m.get("endDate") or m.get("end_date_iso"),
-                )
-                score_map[order["order_id"]] = signal["score"]
-                open_n += 1
-                cooldown_until[mid_id] = now + cooldown_sec
-                if is_expl:
-                    risk.record_exploration(size)
+                    size = risk.size_position(
+                        confidence=signal["score"],
+                        est_prob=signal.get("est_prob"),
+                        price=mid,
+                        is_exploration=is_expl,
+                    )
+                    if size <= 0 or not risk.can_open(size, open_count=open_n):
+                        continue
 
-                tag = "EXPL" if is_expl else "DIR"
+                    token = up_token if direction == "up" else down_token
+                    order = executor.place_order(token, "buy", mid, size, mid_id)
+                    tracker.add(
+                        order,
+                        direction=direction,
+                        slug=m.get("slug", ""),
+                        end_date=m.get("endDate") or m.get("end_date_iso"),
+                    )
+                    score_map[order["order_id"]] = signal["score"]
+                    open_n += 1
+                    cooldown_until[mid_id] = now + cooldown_sec
+                    if is_expl:
+                        risk.record_exploration(size)
+
+                    tag = "EXPL" if is_expl else "DIR"
+                    logger.info(
+                        f"{tag} {direction.upper()} | score={signal['score']:.3f} | "
+                        f"mid={mid:.3f} | mom={mom:.2f} "
+                        f"(1m={mtf['m1']:.2f} 5m={mtf['m5']:.2f} 15m={mtf['m15']:.2f}) | "
+                        f"size=${size:.1f} | {m.get('slug','')[:40]}"
+                    )
+
+                summary = tracker.summary()
+                daily = trade_log.daily_summary()
                 logger.info(
-                    f"{tag} {direction.upper()} | score={signal['score']:.3f} | "
-                    f"mid={mid:.3f} | mom={mom:.2f} "
-                    f"(1m={mtf['m1']:.2f} 5m={mtf['m5']:.2f} 15m={mtf['m15']:.2f}) | "
-                    f"size=${size:.1f} | {m.get('slug','')[:40]}"
+                    f"Cycle | mkts={len(markets)} | open={summary['open_count']} | "
+                    f"pnl=${summary['total_pnl']:.2f} | today {daily['trades']}t ${daily['pnl']:.2f} | "
+                    f"regime={learner.get_regime()} | min_score={learner.get_min_score():.3f} | "
+                    f"bank=${risk.bankroll:.2f}"
                 )
 
-            summary = tracker.summary()
-            daily = trade_log.daily_summary()
-            logger.info(
-                f"Cycle | mkts={len(markets)} | open={summary['open_count']} | "
-                f"pnl=${summary['total_pnl']:.2f} | today {daily['trades']}t ${daily['pnl']:.2f} | "
-                f"regime={learner.get_regime()} | min_score={learner.get_min_score():.3f} | "
-                f"bank=${risk.bankroll:.2f}"
-            )
+            cycles_since_save += 1
+            if cycles_since_save >= 5:
+                state.save({
+                    "bankroll": risk.bankroll,
+                    "peak_bankroll": risk.peak_bankroll,
+                    "learner": learner.export_state(),
+                    "open_count": tracker.open_count(),
+                })
+                cycles_since_save = 0
 
         except Exception as e:
             logger.exception(f"Loop error: {e}")
 
-        time.sleep(cycle)
+        if not _shutdown:
+            time.sleep(cycle)
+
+    # Final save on clean exit
+    state.save({
+        "bankroll": risk.bankroll,
+        "peak_bankroll": risk.peak_bankroll,
+        "learner": learner.export_state(),
+        "open_count": tracker.open_count(),
+    })
+    logger.info("Shutdown complete. State saved.")
 
 
 def run_live(config: dict):
