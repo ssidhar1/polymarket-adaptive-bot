@@ -1,5 +1,6 @@
 """
-Main entry point for Adaptive Short-Term Filter bot.
+ASTF — Adaptive Short-Term Filter
+Aggressive, self-learning, multi-signal paper trader for Polymarket 5m/15m crypto markets.
 """
 import argparse
 import time
@@ -15,7 +16,7 @@ from src.data.polymarket_client import PolymarketData
 from src.data.features import build_features
 from src.data.price_feed import PriceFeed
 from src.data.resolution import ResolutionChecker
-from src.signals.scorer import SignalScorer
+from src.signals.ensemble import EnsembleSignal
 from src.risk.manager import RiskManager
 from src.learning.adaptive import AdaptiveLearner
 from src.execution.paper import PaperExecutor
@@ -31,11 +32,11 @@ def load_config(path: str = "config.yaml") -> dict:
         return yaml.safe_load(f)
 
 def run_paper(config: dict):
-    logger.info("=== ASTF PAPER MODE STARTED ===")
+    logger.info("=== ASTF PAPER MODE — aggressive adaptive mode ===")
     data = PolymarketData()
     prices = PriceFeed()
     resolver = ResolutionChecker()
-    scorer = SignalScorer(config)
+    ensemble = EnsembleSignal(config)
     risk = RiskManager(config, config.get("bankroll", 1000.0))
     learner = AdaptiveLearner(config)
     executor = PaperExecutor()
@@ -43,29 +44,29 @@ def run_paper(config: dict):
     trade_log = TradeLogger()
 
     assets = config.get("markets", {}).get("targets", ["btc", "eth"])
-    cycle = 15
-    price_history = defaultdict(lambda: deque(maxlen=12))
-    # Keep last score per order so we can log it on close
+    cycle = 12  # faster cycle
+    price_history = defaultdict(lambda: deque(maxlen=20))
     score_map = {}
 
-    logger.info(f"Bankroll ${risk.bankroll:.2f} | assets={assets}")
+    logger.info(f"Bankroll ${risk.bankroll:.2f} | assets={assets} | min_score={learner.get_min_score():.3f}")
 
     while True:
         try:
             if risk.paused:
                 logger.warning(f"PAUSED: {risk.pause_reason}")
-                time.sleep(60)
+                time.sleep(45)
                 continue
 
+            # Momentum feed
             px = prices.get_prices()
             for asset, p in px.items():
                 price_history[asset].append(p)
 
-            scorer.min_score = learner.get_min_score()
+            ensemble.min_score = learner.get_min_score()
 
             markets = data.get_active_short_term_markets(assets=assets)
 
-            # --- Try to resolve open positions with real market status ---
+            # Real resolution
             for pos in list(tracker.get_open_list()):
                 closed, up_p, down_p = resolver.check(slug=pos.slug, market_id=pos.market_id)
                 if closed and up_p is not None:
@@ -83,81 +84,100 @@ def run_paper(config: dict):
                                 "features": {},
                             })
                             trade_log.log(trade, score=score)
-                            logger.info(f"REAL RESOLVE {pos.direction} → {final:.0f} | pnl=${trade['pnl']:.3f}")
+                            logger.info(f"RESOLVED {pos.direction.upper()} → {final:.0f} | pnl=${trade['pnl']:.3f}")
 
             if not markets:
                 summary = tracker.summary()
                 daily = trade_log.daily_summary()
                 logger.info(
-                    f"No markets | open={summary['open_count']} | "
-                    f"today trades={daily['trades']} pnl=${daily['pnl']:.2f} | "
-                    f"bankroll=${risk.bankroll:.2f}"
+                    f"No active markets | open={summary['open_count']} | "
+                    f"today {daily['trades']}t ${daily['pnl']:.2f} | bankroll=${risk.bankroll:.2f}"
                 )
                 time.sleep(cycle)
                 continue
 
-            for m in markets[:6]:
+            for m in markets[:8]:
                 up_token = m.get("_up_token")
                 down_token = m.get("_down_token")
                 asset = m.get("_asset", "btc")
-                if not up_token:
+                if not up_token or not down_token:
                     continue
 
-                book = data.get_order_book(up_token)
+                book_up = data.get_order_book(up_token)
+                book_down = data.get_order_book(down_token)
+                up_mid = book_up.get("mid")
+                down_mid = book_down.get("mid")
+
                 hist = list(price_history.get(asset, []))
                 mom = prices.momentum(asset, hist) if len(hist) >= 2 else 0.0
 
-                features = build_features(m, book, external_momentum=mom)
-                signal = scorer.score(features)
-
-                if not signal["pass"]:
-                    continue
-
-                mid = features.get("mid_price") or 0.5
-                direction = signal["direction"]
-                edge = abs(mid - 0.5)
-                min_edge = config.get("risk", {}).get("min_edge_after_fees", 0.015)
-                if edge < min_edge:
-                    continue
-
-                size = risk.size_position(signal["score"])
-                if not risk.can_open(size):
-                    continue
+                features = build_features(m, book_up, external_momentum=mom)
+                signal = ensemble.evaluate(features, up_mid=up_mid, down_mid=down_mid)
 
                 mid_id = m.get("id") or m.get("slug")
                 if any(p.market_id == mid_id for p in tracker.get_open_list()):
                     continue
 
-                token = up_token if direction == "up" else down_token
-                order = executor.place_order(
-                    token_id=token,
-                    side="buy",
+                # --- Complete-set arbitrage path ---
+                if signal.get("type") == "complete_set":
+                    size = risk.size_position(signal["score"], is_exploration=False)
+                    if not risk.can_open(size * 2):
+                        continue
+                    # Paper buy both sides
+                    for side, token, price in [("up", up_token, signal["up_price"]), ("down", down_token, signal["down_price"])]:
+                        half = size
+                        order = executor.place_order(token, "buy", price, half, mid_id)
+                        tracker.add(order, direction=side, slug=m.get("slug", ""),
+                                    end_date=m.get("endDate") or m.get("end_date_iso"))
+                        score_map[order["order_id"]] = signal["score"]
+                    logger.info(f"ARB COMPLETE-SET | edge={signal['edge']:.3f} | size=${size:.1f} | {m.get('slug','')[:40]}")
+                    continue
+
+                # --- Directional path ---
+                if not signal.get("pass"):
+                    # Exploration: occasionally take marginal signals in favorable regime
+                    if learner.get_regime() == "favorable" and signal["score"] > ensemble.min_score - 0.08:
+                        is_expl = True
+                    else:
+                        continue
+                else:
+                    is_expl = False
+
+                direction = signal["direction"]
+                mid = features.get("mid_price") or 0.5
+                est_prob = signal.get("est_prob")
+
+                size = risk.size_position(
+                    confidence=signal["score"],
+                    est_prob=est_prob,
                     price=mid,
-                    size_usd=size,
-                    market_id=mid_id,
+                    is_exploration=is_expl,
                 )
+                if not risk.can_open(size):
+                    continue
 
-                tracker.add(
-                    order,
-                    direction=direction,
-                    slug=m.get("slug", ""),
-                    end_date=m.get("endDate") or m.get("end_date_iso"),
-                )
+                token = up_token if direction == "up" else down_token
+                order = executor.place_order(token, "buy", mid, size, mid_id)
+                tracker.add(order, direction=direction, slug=m.get("slug", ""),
+                            end_date=m.get("endDate") or m.get("end_date_iso"))
                 score_map[order["order_id"]] = signal["score"]
+                if is_expl:
+                    risk.record_exploration(size)
 
+                tag = "EXPL" if is_expl else "DIR"
                 logger.info(
-                    f"OPEN {direction.upper()} | score={signal['score']:.3f} | "
-                    f"mid={mid:.3f} | mom={mom:.2f} | size=${size:.1f} | {m.get('slug','')[:45]}"
+                    f"{tag} {direction.upper()} | score={signal['score']:.3f} | "
+                    f"prob≈{est_prob:.2f} | mid={mid:.3f} | mom={mom:.2f} | "
+                    f"size=${size:.1f} | {m.get('slug','')[:40]}"
                 )
 
             summary = tracker.summary()
             daily = trade_log.daily_summary()
             logger.info(
                 f"Cycle | mkts={len(markets)} | open={summary['open_count']} | "
-                f"closed={summary['closed_count']} | total_pnl=${summary['total_pnl']:.2f} | "
-                f"today={daily['trades']}t ${daily['pnl']:.2f} | "
+                f"pnl=${summary['total_pnl']:.2f} | today {daily['trades']}t ${daily['pnl']:.2f} | "
                 f"regime={learner.get_regime()} | min_score={learner.get_min_score():.3f} | "
-                f"bankroll=${risk.bankroll:.2f}"
+                f"bank=${risk.bankroll:.2f}"
             )
 
         except Exception as e:
@@ -166,16 +186,14 @@ def run_paper(config: dict):
         time.sleep(cycle)
 
 def run_live(config: dict):
-    logger.warning("LIVE mode not enabled. Paper trade first and verify edge.")
+    logger.warning("LIVE mode locked. Prove edge in paper first.")
 
 def main():
-    parser = argparse.ArgumentParser(description="Polymarket Adaptive Short-Term Filter")
+    parser = argparse.ArgumentParser(description="ASTF — Adaptive Short-Term Filter")
     parser.add_argument("--mode", choices=["paper", "live"], default=os.getenv("DEFAULT_MODE", "paper"))
     parser.add_argument("--config", default="config.yaml")
     args = parser.parse_args()
-
     config = load_config(args.config)
-
     if args.mode == "paper":
         run_paper(config)
     else:
