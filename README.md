@@ -2,16 +2,16 @@
 
 **Aggressive, self-learning, multi-signal paper trader** for Polymarket 5m / 15m BTC & ETH Up/Down markets.
 
-> **Truth**: No bot is “super duper profitable” by default. Most short-term Polymarket bots lose after fees. This system is designed to hunt real edges (structural + directional) as hard as possible while still having hard circuit breakers. Paper extensively before any real money.
+> **Truth**: No bot is “super duper profitable” by default. Most short-term Polymarket bots lose after fees. This system hunts structural + directional edges with hard circuit breakers. Paper extensively before any real money.
 
-## What makes it different
-- **Complete-set arbitrage detector** — buys both sides when Up + Down < 1 after costs (structural edge)
-- **Multi-signal ensemble** — momentum + book imbalance + time decay + spread regime
-- **Kelly-lite position sizing** when a probability estimate exists
-- **Exploration budget** — small controlled degen capital when regime is favorable
-- **Real resolution checking** via Gamma (not simulated forever)
-- **Self-calibrating threshold + regime detection**
-- Fast cycle + persistent trade log
+## What it does
+- **Complete-set arbitrage** when Up + Down < ~1 after costs
+- **Multi-timeframe momentum** (Binance 1m/5m/15m klines + local blend)
+- **Ensemble signals** — momentum, book imbalance, time decay, spread, depth filter
+- **Kelly-lite sizing** + exploration budget
+- **Hardened resolution** — multi-path Gamma lookup (slug, path, events, winner flags)
+- **SQLite trade store** (`trades.db`) with daily + all-time reports
+- Adaptive threshold + regime detection
 
 ## Quick Start
 
@@ -29,27 +29,28 @@ python -m scripts.daily_report
 
 ## Architecture
 ```
-Scanner (Gamma) → Books (CLOB) + Momentum (Binance)
+Scanner (Gamma) → Books (CLOB) + MTF Momentum (Binance klines)
        ↓
 Features + Ensemble (directional + complete-set arb)
        ↓
-Kelly-lite / confidence sizing + Risk circuit breakers
+Kelly-lite sizing + Risk circuit breakers
        ↓
-Paper execution → Real resolution → Learner + trades.csv
+Paper execution → Hardened resolution → Learner + trades.db (SQLite)
 ```
 
-## Risk (still serious)
+## Risk
 - Max position size, concurrent limits
-- Daily loss limit → pause
+- Daily loss limit → pause (clears next day)
 - Max drawdown → hard pause
-- Exploration budget is capped and separate
+- Thin-book filter + per-market cooldown
+- Stale position force-exit
 
 ## Status
-- Paper mode is fully end-to-end and aggressive
-- Live mode remains locked on purpose
-- The only way this becomes highly profitable is if the combination of structural arb + selective directional trades actually has positive expectancy after fees. That must be proven in paper.
+- Paper mode is fully end-to-end
+- Live mode remains locked
+- Profitability is not guaranteed — prove expectancy in paper first
 
 ## Disclaimer
-Experimental. You can lose money. Do not deposit capital you cannot afford to lose. Paper first.
+Experimental. You can lose money. Paper first.
 
 MIT
