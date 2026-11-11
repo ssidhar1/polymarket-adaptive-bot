@@ -3,18 +3,19 @@ Position tracker + resolution logic for paper (and later live) trades.
 """
 from dataclasses import dataclass, field
 from typing import Dict, List, Optional
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 import logging
 
 logger = logging.getLogger("astf.positions")
+
 
 @dataclass
 class OpenPosition:
     order_id: str
     market_id: str
     token_id: str
-    direction: str          # "up" or "down"
-    side: str               # "buy"
+    direction: str
+    side: str
     entry_price: float
     size_usd: float
     shares: float
@@ -22,6 +23,7 @@ class OpenPosition:
     opened_at: datetime
     slug: str = ""
     end_date: Optional[str] = None
+
 
 class PositionTracker:
     def __init__(self):
@@ -40,17 +42,13 @@ class PositionTracker:
             shares=order["shares"],
             fee=order["fee"],
             opened_at=datetime.now(timezone.utc),
-            slug=slug,
+            slug=slug or "",
             end_date=end_date,
         )
         self.open[order["order_id"]] = pos
-        logger.info(f"Opened position {order['order_id']} {direction} @ {order['fill_price']:.3f}")
+        logger.info(f"Opened {order['order_id']} {direction} @ {order['fill_price']:.3f}")
 
     def resolve(self, order_id: str, resolution_price: float) -> Optional[Dict]:
-        """
-        resolution_price should be 1.0 if the side we bought won, else 0.0
-        (or the actual final price of the token we hold).
-        """
         if order_id not in self.open:
             return None
         pos = self.open.pop(order_id)
@@ -75,6 +73,23 @@ class PositionTracker:
 
     def get_open_list(self) -> List[OpenPosition]:
         return list(self.open.values())
+
+    def open_count(self) -> int:
+        return len(self.open)
+
+    def is_stale(self, pos: OpenPosition, grace_seconds: int = 180) -> bool:
+        """True if past end_date + grace, or open longer than 25 minutes."""
+        now = datetime.now(timezone.utc)
+        if pos.end_date:
+            try:
+                end = datetime.fromisoformat(pos.end_date.replace("Z", "+00:00"))
+                if now > end + timedelta(seconds=grace_seconds):
+                    return True
+            except Exception:
+                pass
+        if now - pos.opened_at > timedelta(minutes=25):
+            return True
+        return False
 
     def summary(self) -> Dict:
         total_pnl = sum(t["pnl"] for t in self.closed)
