@@ -3,7 +3,7 @@ ASTF — Adaptive Short-Term Filter
 Self-learning multi-signal paper trader for Polymarket 5m/15m crypto markets.
 """
 import argparse
-import signal
+import signal as os_signal
 import time
 import yaml
 import os
@@ -45,8 +45,8 @@ def load_config(path: str = "config.yaml") -> dict:
 
 def run_paper(config: dict):
     global _shutdown
-    signal.signal(signal.SIGINT, _handle_signal)
-    signal.signal(signal.SIGTERM, _handle_signal)
+    os_signal.signal(os_signal.SIGINT, _handle_signal)
+    os_signal.signal(os_signal.SIGTERM, _handle_signal)
 
     logger.info("=== ASTF PAPER MODE ===")
     data = PolymarketData()
@@ -173,17 +173,17 @@ def run_paper(config: dict):
                     mom = prices.momentum(asset, hist)
 
                     features = build_features(m, book_up, external_momentum=mom)
-                    signal = ensemble.evaluate(features, up_mid=up_mid, down_mid=down_mid)
+                    sig = ensemble.evaluate(features, up_mid=up_mid, down_mid=down_mid)
 
-                    if signal.get("type") == "complete_set":
-                        size = risk.size_position(signal["score"], is_exploration=False)
+                    if sig.get("type") == "complete_set":
+                        size = risk.size_position(sig["score"], is_exploration=False)
                         if not risk.can_open(size, open_count=open_n):
                             continue
                         if not risk.can_open(size, open_count=open_n + 1):
                             continue
                         for side, token, price in [
-                            ("up", up_token, signal["up_price"]),
-                            ("down", down_token, signal["down_price"]),
+                            ("up", up_token, sig["up_price"]),
+                            ("down", down_token, sig["down_price"]),
                         ]:
                             order = executor.place_order(token, "buy", price, size, mid_id)
                             tracker.add(
@@ -192,25 +192,25 @@ def run_paper(config: dict):
                                 slug=m.get("slug", ""),
                                 end_date=m.get("endDate") or m.get("end_date_iso"),
                             )
-                            score_map[order["order_id"]] = signal["score"]
+                            score_map[order["order_id"]] = sig["score"]
                             open_n += 1
                         cooldown_until[mid_id] = now + cooldown_sec
                         logger.info(
-                            f"ARB SET | edge={signal['edge']:.3f} | size=${size:.1f} | {m.get('slug','')[:40]}"
+                            f"ARB SET | edge={sig['edge']:.3f} | size=${size:.1f} | {m.get('slug','')[:40]}"
                         )
                         continue
 
                     is_expl = False
-                    if not signal.get("pass"):
+                    if not sig.get("pass"):
                         if (
                             learner.get_regime() == "favorable"
-                            and signal.get("score", 0) > ensemble.min_score - 0.08
+                            and sig.get("score", 0) > ensemble.min_score - 0.08
                         ):
                             is_expl = True
                         else:
                             continue
 
-                    direction = signal["direction"]
+                    direction = sig["direction"]
                     mid = features.get("mid_price") or 0.5
                     if direction == "down" and down_mid is not None:
                         mid = down_mid
@@ -218,8 +218,8 @@ def run_paper(config: dict):
                         mid = up_mid
 
                     size = risk.size_position(
-                        confidence=signal["score"],
-                        est_prob=signal.get("est_prob"),
+                        confidence=sig["score"],
+                        est_prob=sig.get("est_prob"),
                         price=mid,
                         is_exploration=is_expl,
                     )
@@ -234,7 +234,7 @@ def run_paper(config: dict):
                         slug=m.get("slug", ""),
                         end_date=m.get("endDate") or m.get("end_date_iso"),
                     )
-                    score_map[order["order_id"]] = signal["score"]
+                    score_map[order["order_id"]] = sig["score"]
                     open_n += 1
                     cooldown_until[mid_id] = now + cooldown_sec
                     if is_expl:
@@ -242,7 +242,7 @@ def run_paper(config: dict):
 
                     tag = "EXPL" if is_expl else "DIR"
                     logger.info(
-                        f"{tag} {direction.upper()} | score={signal['score']:.3f} | "
+                        f"{tag} {direction.upper()} | score={sig['score']:.3f} | "
                         f"mid={mid:.3f} | mom={mom:.2f} "
                         f"(1m={mtf['m1']:.2f} 5m={mtf['m5']:.2f} 15m={mtf['m15']:.2f}) | "
                         f"size=${size:.1f} | {m.get('slug','')[:40]}"
@@ -273,7 +273,6 @@ def run_paper(config: dict):
         if not _shutdown:
             time.sleep(cycle)
 
-    # Final save on clean exit
     state.save({
         "bankroll": risk.bankroll,
         "peak_bankroll": risk.peak_bankroll,
