@@ -1,24 +1,23 @@
 """
 Data layer for short-term crypto Up/Down markets on Polymarket.
-Uses public Gamma API for discovery and CLOB for books.
-
-IMPORTANT: Gamma /series for btc-up-or-down-5m often returns only far-future
-windows (many hours out). Live windows use deterministic slugs:
+Live windows use deterministic slugs:
   {asset}-updown-{5m|15m}-{unix_aligned_to_window}
 """
-from typing import List, Dict, Optional, Any
+from typing import List, Dict, Optional, Any, Tuple
 import json
 import logging
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 import requests
+from requests.adapters import HTTPAdapter
+from urllib3.util.retry import Retry
 
 logger = logging.getLogger("astf.data")
 
 GAMMA = "https://gamma-api.polymarket.com"
 CLOB = "https://clob.polymarket.com"
 
-# slug pattern: btc-updown-5m-{ts}
 WINDOWS = [
     ("5m", 300),
     ("15m", 900),
@@ -52,18 +51,32 @@ def _end_ts(iso: Optional[str]) -> float:
         return float("inf")
 
 
+def _build_session() -> requests.Session:
+    s = requests.Session()
+    s.headers.update({"User-Agent": "astf-bot/0.6"})
+    retry = Retry(
+        total=2,
+        backoff_factor=0.3,
+        status_forcelist=(429, 500, 502, 503, 504),
+        allowed_methods=frozenset(["GET"]),
+    )
+    adapter = HTTPAdapter(max_retries=retry, pool_connections=20, pool_maxsize=20)
+    s.mount("https://", adapter)
+    s.mount("http://", adapter)
+    return s
+
+
 class PolymarketData:
     def __init__(self):
-        self.session = requests.Session()
-        self.session.headers.update({"User-Agent": "astf-bot/0.5"})
-        logger.info("PolymarketData initialized (slug-time discovery + CLOB)")
+        self.session = _build_session()
+        logger.info("PolymarketData initialized (parallel slug discovery + CLOB)")
 
     def _market_by_slug(self, slug: str) -> Optional[Dict]:
         try:
             r = self.session.get(
                 f"{GAMMA}/markets",
                 params={"slug": slug},
-                timeout=10,
+                timeout=8,
             )
             r.raise_for_status()
             data = r.json()
@@ -75,11 +88,7 @@ class PolymarketData:
             logger.debug(f"Market slug fetch failed {slug}: {e}")
         return None
 
-    def _candidate_slugs(self, assets: List[str], now: float) -> List[tuple]:
-        """
-        Build (asset, window_label, slug, window_sec) for nearby live windows.
-        Slug unix = start of window (aligned).
-        """
+    def _candidate_slugs(self, assets: List[str], now: float) -> List[Tuple[str, str, str, int, int]]:
         out = []
         now_i = int(now)
         for asset in assets:
@@ -88,68 +97,78 @@ class PolymarketData:
                 continue
             for label, step in WINDOWS:
                 base = (now_i // step) * step
-                # previous (may still be resolving), current, next few
-                for i in range(-1, 5):
+                # current + next few only (previous often already ending)
+                for i in range(0, 4):
                     ts = base + i * step
                     slug = f"{asset}-updown-{label}-{ts}"
                     out.append((asset, label, slug, step, ts))
         return out
+
+    def _hydrate(self, meta: Tuple[str, str, str, int, int], now: float) -> Optional[Dict]:
+        asset, label, slug, step, win_start = meta
+        m = self._market_by_slug(slug)
+        if not m:
+            return None
+        if m.get("closed") or not m.get("active", True):
+            return None
+
+        end_iso = m.get("endDate")
+        end_t = _end_ts(end_iso)
+        if end_t == float("inf"):
+            end_t = float(win_start + step)
+
+        # Live / near-live only
+        if end_t < now + 45:
+            return None
+        if end_t > now + 45 * 60:  # >45 min out — skip
+            return None
+
+        token_ids = m.get("clobTokenIds")
+        if isinstance(token_ids, str):
+            try:
+                token_ids = json.loads(token_ids)
+            except Exception:
+                token_ids = []
+        if not isinstance(token_ids, list) or len(token_ids) < 2:
+            return None
+
+        m["_up_token"] = str(token_ids[0])
+        m["_down_token"] = str(token_ids[1])
+        m["_asset"] = asset
+        m["_series"] = f"{asset}-up-or-down-{label}"
+        m["_end_ts"] = end_t
+        m["_window"] = label
+        if not m.get("slug"):
+            m["slug"] = slug
+        if not m.get("endDate"):
+            m["endDate"] = datetime.fromtimestamp(end_t, tz=timezone.utc).isoformat().replace("+00:00", "Z")
+        return m
 
     def get_active_short_term_markets(self, assets: List[str] = None, limit: int = 100) -> List[Dict]:
         if assets is None:
             assets = ["btc", "eth"]
 
         now = time.time()
-        results = []
+        candidates = self._candidate_slugs(assets, now)
+        results: List[Dict] = []
         seen = set()
 
-        for asset, label, slug, step, win_start in self._candidate_slugs(assets, now):
-            if slug in seen:
-                continue
-            m = self._market_by_slug(slug)
-            if not m:
-                continue
-            if m.get("closed") or not m.get("active", True):
-                continue
-
-            end_iso = m.get("endDate")
-            end_t = _end_ts(end_iso)
-            # Prefer endDate; fallback to window start + step
-            if end_t == float("inf"):
-                end_t = float(win_start + step)
-
-            # Must still have meaningful time left (skip ending in <40s)
-            if end_t < now + 40:
-                continue
-            # Safety: ignore absurd far windows
-            if end_t > now + 2 * 3600:
-                continue
-
-            token_ids = m.get("clobTokenIds")
-            if isinstance(token_ids, str):
+        # Parallel fetch — serial was 15–25s and starved the loop
+        with ThreadPoolExecutor(max_workers=12) as pool:
+            futs = {pool.submit(self._hydrate, c, now): c[2] for c in candidates}
+            for fut in as_completed(futs):
                 try:
-                    token_ids = json.loads(token_ids)
-                except Exception:
-                    token_ids = []
-            if not isinstance(token_ids, list) or len(token_ids) < 2:
-                continue
-
-            m["_up_token"] = str(token_ids[0])
-            m["_down_token"] = str(token_ids[1])
-            m["_asset"] = asset
-            m["_series"] = f"{asset}-up-or-down-{label}"
-            m["_end_ts"] = end_t
-            m["_window"] = label
-            if not m.get("slug"):
-                m["slug"] = slug
-            if end_iso and not m.get("endDate"):
-                m["endDate"] = end_iso
-            elif not m.get("endDate"):
-                # synthesize ISO if missing
-                m["endDate"] = datetime.fromtimestamp(end_t, tz=timezone.utc).isoformat().replace("+00:00", "Z")
-
-            seen.add(slug)
-            results.append(m)
+                    m = fut.result()
+                except Exception as e:
+                    logger.debug(f"hydrate failed: {e}")
+                    continue
+                if not m:
+                    continue
+                slug = m.get("slug")
+                if not slug or slug in seen:
+                    continue
+                seen.add(slug)
+                results.append(m)
 
         results.sort(key=lambda x: x.get("_end_ts", float("inf")))
         results = results[:limit]
