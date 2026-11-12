@@ -8,6 +8,7 @@ import time
 import yaml
 import os
 from pathlib import Path
+from datetime import datetime, timezone
 from collections import defaultdict, deque
 from dotenv import load_dotenv
 
@@ -46,6 +47,30 @@ def load_config(path: str = "config.yaml") -> dict:
     return cfg
 
 
+def _timing_meta(m: dict, feat: dict, score: float, edge: float, mom: float, regime: str, trade_type: str) -> dict:
+    now = datetime.now(timezone.utc)
+    window = m.get("_window") or ""
+    if not window:
+        slug = (m.get("slug") or "").lower()
+        if "5m" in slug:
+            window = "5m"
+        elif "15m" in slug:
+            window = "15m"
+    return {
+        "asset": m.get("_asset") or "",
+        "window": window,
+        "hour_utc": now.hour,
+        "weekday_utc": now.weekday(),
+        "time_remaining_s": float(feat.get("time_remaining_s") or 0),
+        "time_remaining_pct": float(feat.get("time_remaining_pct") or 0),
+        "score": float(score or 0),
+        "edge_after_fees": float(edge or 0),
+        "momentum": float(mom or 0),
+        "regime": regime or "",
+        "trade_type": trade_type,
+    }
+
+
 def run_paper(config: dict):
     global _shutdown
     os_signal.signal(os_signal.SIGINT, _handle_signal)
@@ -75,11 +100,11 @@ def run_paper(config: dict):
     assets = config.get("markets", {}).get("targets", ["btc", "eth"])
     cycle = int(config.get("execution", {}).get("cycle_seconds", 10))
     price_history = defaultdict(lambda: deque(maxlen=20))
-    score_map = {}
     cooldown_until = {}
     cooldown_sec = int(config.get("execution", {}).get("cooldown_seconds", 60))
     max_per_cycle = int(config.get("execution", {}).get("max_markets_per_cycle", 12))
     cycles_since_save = 0
+    cycles_since_timing = 0
 
     logger.info(
         f"Bankroll ${risk.bankroll:.2f} | assets={assets} | "
@@ -100,6 +125,7 @@ def run_paper(config: dict):
                 price_history[asset].append(p)
 
             ensemble.min_score = learner.get_min_score()
+            regime = learner.get_regime()
 
             for pos in list(tracker.get_open_list()):
                 closed, up_p, down_p = resolver.check(
@@ -112,17 +138,19 @@ def run_paper(config: dict):
                         trade = tracker.resolve(pos.order_id, final)
                         if trade:
                             risk.record_pnl(trade["pnl"])
-                            score = score_map.pop(pos.order_id, 0.7)
                             learner.log_trade({
-                                "score": score,
+                                "score": trade.get("score", 0.7),
                                 "direction": trade["direction"],
                                 "entry_price": trade["entry_price"],
                                 "pnl": trade["pnl"],
                                 "stale": False,
                             })
-                            trade_log.log(trade, score=score)
+                            trade_log.log(trade, score=trade.get("score", 0))
                             logger.info(
-                                f"RESOLVED {pos.direction.upper()} → {final:.0f} | pnl=${trade['pnl']:.3f}"
+                                f"RESOLVED {pos.direction.upper()} → {final:.0f} | "
+                                f"pnl=${trade['pnl']:.3f} | "
+                                f"h={trade.get('hour_utc')} wd={trade.get('weekday_utc')} "
+                                f"win={trade.get('window')} t_left={trade.get('time_remaining_s', 0):.0f}s"
                             )
                         continue
 
@@ -130,17 +158,17 @@ def run_paper(config: dict):
                     trade = tracker.resolve(pos.order_id, 0.5)
                     if trade:
                         risk.record_pnl(trade["pnl"])
-                        score = score_map.pop(pos.order_id, 0.5)
                         learner.log_trade({
-                            "score": score,
+                            "score": trade.get("score", 0.5),
                             "direction": trade["direction"],
                             "entry_price": trade["entry_price"],
                             "pnl": trade["pnl"],
                             "stale": True,
                         })
-                        trade_log.log(trade, score=score)
+                        trade_log.log(trade, score=trade.get("score", 0))
                         logger.warning(
-                            f"STALE EXIT {pos.direction} @ 0.5 | pnl=${trade['pnl']:.3f}"
+                            f"STALE EXIT {pos.direction} @ 0.5 | pnl=${trade['pnl']:.3f} | "
+                            f"h={trade.get('hour_utc')} win={trade.get('window')}"
                         )
 
             markets = data.get_active_short_term_markets(assets=assets)
@@ -162,7 +190,6 @@ def run_paper(config: dict):
                     if not up_token or not down_token:
                         continue
 
-                    # Prefer slug as stable market key (ids can be awkward)
                     slug = m.get("slug") or ""
                     mid_id = slug or str(m.get("id") or "")
                     if not mid_id:
@@ -171,8 +198,7 @@ def run_paper(config: dict):
                     if cooldown_until.get(mid_id, 0) > now:
                         continue
                     if any(
-                        (p.slug and p.slug == slug)
-                        or p.market_id == mid_id
+                        (p.slug and p.slug == slug) or p.market_id == mid_id
                         for p in tracker.get_open_list()
                     ):
                         continue
@@ -184,7 +210,6 @@ def run_paper(config: dict):
                     up_ask = book_up.get("best_ask") or best_ask(book_up)
                     down_ask = book_down.get("best_ask") or best_ask(book_down)
 
-                    # No book → cannot price safely
                     if (up_ask is None and up_mid is None) or (
                         down_ask is None and down_mid is None
                     ):
@@ -208,6 +233,9 @@ def run_paper(config: dict):
                         if size > 0 and risk.can_open(size, open_count=open_n) and risk.can_open(
                             size, open_count=open_n + 1
                         ):
+                            meta = _timing_meta(
+                                m, feat_up, arb["score"], arb.get("edge") or 0, mom, regime, "arb"
+                            )
                             for side, token, price in [
                                 ("up", up_token, arb["up_price"]),
                                 ("down", down_token, arb["down_price"]),
@@ -220,14 +248,14 @@ def run_paper(config: dict):
                                     direction=side,
                                     slug=slug,
                                     end_date=m.get("endDate") or m.get("end_date_iso"),
+                                    meta=meta,
                                 )
-                                score_map[order["order_id"]] = arb["score"]
                                 open_n += 1
                             cooldown_until[mid_id] = now + cooldown_sec
                             trades_this_cycle += 1
                             logger.info(
                                 f"ARB SET | edge={arb['edge']:.3f} | size=${size:.1f} | "
-                                f"{slug[:40]}"
+                                f"h={meta['hour_utc']} win={meta['window']} | {slug[:40]}"
                             )
                             continue
 
@@ -242,7 +270,7 @@ def run_paper(config: dict):
                         if entry_px is None:
                             continue
                         if not sig.get("pass") and not (
-                            learner.get_regime() == "favorable"
+                            regime == "favorable"
                             and sig.get("score", 0) > ensemble.min_score - 0.06
                             and (sig.get("edge_after_fees") or 0) > 0.01
                         ):
@@ -275,6 +303,10 @@ def run_paper(config: dict):
                     if size <= 0 or not risk.can_open(size, open_count=open_n):
                         continue
 
+                    trade_type = "expl" if is_expl else "dir"
+                    meta = _timing_meta(
+                        m, feat, sig["score"], edge or 0, mom, regime, trade_type
+                    )
                     order = executor.place_order(
                         token, "buy", entry, size, mid_id, already_aggressive=True
                     )
@@ -283,8 +315,8 @@ def run_paper(config: dict):
                         direction=direction,
                         slug=slug,
                         end_date=m.get("endDate") or m.get("end_date_iso"),
+                        meta=meta,
                     )
-                    score_map[order["order_id"]] = sig["score"]
                     open_n += 1
                     trades_this_cycle += 1
                     cooldown_until[mid_id] = now + cooldown_sec
@@ -296,7 +328,8 @@ def run_paper(config: dict):
                         f"{tag} {direction.upper()} | score={sig['score']:.3f} | "
                         f"entry={entry:.3f} | edge={edge if edge is not None else 0:.3f} | "
                         f"mom={mom:.2f} (1m={mtf['m1']:.2f} 5m={mtf['m5']:.2f} 15m={mtf['m15']:.2f}) | "
-                        f"size=${size:.1f} | {slug[:40]}"
+                        f"size=${size:.1f} | h={meta['hour_utc']} wd={meta['weekday_utc']} "
+                        f"win={meta['window']} t_left={meta['time_remaining_s']:.0f}s | {slug[:40]}"
                     )
 
                 rejects = ensemble.pop_reject_summary()
@@ -311,11 +344,12 @@ def run_paper(config: dict):
                     f"Cycle | mkts={len(markets)} | opened={trades_this_cycle} | "
                     f"open={summary['open_count']} | pnl=${summary['total_pnl']:.2f} | "
                     f"today {daily['trades']}t ${daily['pnl']:.2f} | "
-                    f"regime={learner.get_regime()} | min_score={learner.get_min_score():.3f} | "
+                    f"regime={regime} | min_score={learner.get_min_score():.3f} | "
                     f"bank=${risk.bankroll:.2f}{reject_str}"
                 )
 
             cycles_since_save += 1
+            cycles_since_timing += 1
             if cycles_since_save >= 5:
                 state.save({
                     "bankroll": risk.bankroll,
@@ -324,6 +358,13 @@ def run_paper(config: dict):
                     "open_count": tracker.open_count(),
                 })
                 cycles_since_save = 0
+
+            # Every ~30 cycles dump timing aggregates (needs resolved trades)
+            if cycles_since_timing >= 30:
+                cycles_since_timing = 0
+                ts = trade_log.timing_summary(min_trades=3)
+                if ts.get("by_hour_utc") or ts.get("by_window"):
+                    logger.info(f"TIMING_SUMMARY hour={ts.get('by_hour_utc')} window={ts.get('by_window')}")
 
         except Exception as e:
             logger.exception(f"Loop error: {e}")
