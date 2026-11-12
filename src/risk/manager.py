@@ -1,7 +1,6 @@
 """
 Risk Manager - aggressive but controlled.
 Kelly-lite sizing, exploration budget, hard circuit breakers.
-Open position count is supplied by PositionTracker (source of truth).
 """
 from typing import Optional
 import logging
@@ -32,7 +31,6 @@ class RiskManager:
             self.daily_pnl = 0.0
             self.exploration_used_today = 0.0
             self.current_day = today
-            # Allow recovery from daily pause on new day
             if self.paused and self.pause_reason and "Daily loss" in self.pause_reason:
                 self.paused = False
                 self.pause_reason = None
@@ -71,6 +69,7 @@ class RiskManager:
         est_prob: Optional[float] = None,
         price: float = 0.5,
         is_exploration: bool = False,
+        edge_after_fees: Optional[float] = None,
     ) -> float:
         max_pct = self.config.get("max_position_pct", 0.05)
         base = self.bankroll * max_pct
@@ -78,19 +77,28 @@ class RiskManager:
         if is_exploration:
             explor_pct = self.learning_cfg.get("exploration_pct", 0.05)
             remaining = max(0.0, self.bankroll * explor_pct - self.exploration_used_today)
-            return min(base * 0.4, remaining)
+            return min(base * 0.35, remaining)
 
+        # Never force size on negative / missing edge
+        if edge_after_fees is not None and edge_after_fees <= 0:
+            return 0.0
         if est_prob is not None and 0.01 < price < 0.99:
             edge = est_prob - price
+            if edge_after_fees is not None:
+                edge = edge_after_fees
             if edge <= 0:
-                return base * 0.25
+                return 0.0
+            # quarter-Kelly on binary: f* = edge / (1 - price) roughly for payoff 1
             kelly = edge / max(1e-6, (1.0 - price))
-            kelly = max(0.0, min(kelly * 0.25, max_pct))  # quarter Kelly, capped
+            kelly = max(0.0, min(kelly * 0.2, max_pct))
             size = self.bankroll * kelly
-            return max(base * 0.25, min(base, size))
+            # scale up a bit with confidence, but never below 0 when edge is weak
+            conf_scale = max(0.5, min(1.0, (confidence - 0.5) / 0.35))
+            size *= conf_scale
+            return max(0.0, min(base, size))
 
-        scale = max(0.25, min(1.0, (confidence - 0.5) / 0.4))
-        return base * scale
+        scale = max(0.0, min(1.0, (confidence - 0.55) / 0.35))
+        return base * scale if scale > 0 else 0.0
 
     def record_exploration(self, size: float):
         self.exploration_used_today += size
