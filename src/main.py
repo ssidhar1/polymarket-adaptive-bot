@@ -84,10 +84,21 @@ def run_paper(config: dict):
     state = StateStore()
     saved = state.load()
 
-    start_bank = float(saved.get("bankroll", config.get("bankroll", 1000.0)))
+    # Full paper bankroll reset (optional env)
+    if os.getenv("PAPER_RESET_BANKROLL", "").lower() in ("1", "true", "yes"):
+        start_bank = float(config.get("bankroll", 1000.0))
+        logger.warning(f"PAPER_RESET_BANKROLL: starting fresh at ${start_bank:.2f}")
+        saved = {}
+    else:
+        start_bank = float(saved.get("bankroll", config.get("bankroll", 1000.0)))
+
     risk = RiskManager(config, start_bank)
-    if saved.get("peak_bankroll"):
+    if saved.get("peak_bankroll") and not os.getenv("PAPER_RESET_BANKROLL"):
         risk.peak_bankroll = float(saved["peak_bankroll"])
+
+    # Process restart → daily_pnl is 0; clear any stale daily pause concept
+    # (drawdown pause only applies after fresh losses or if bank << peak beyond max_dd)
+    risk.clear_daily_pause("service restart")
 
     learner = AdaptiveLearner(config)
     learner.import_state(saved.get("learner") or {})
@@ -105,18 +116,29 @@ def run_paper(config: dict):
     max_per_cycle = int(config.get("execution", {}).get("max_markets_per_cycle", 12))
     cycles_since_save = 0
     cycles_since_timing = 0
+    last_pause_log = 0.0
 
     logger.info(
-        f"Bankroll ${risk.bankroll:.2f} | assets={assets} | "
+        f"Bankroll ${risk.bankroll:.2f} | peak=${risk.peak_bankroll:.2f} | assets={assets} | "
         f"min_score={learner.get_min_score():.3f} | regime={learner.get_regime()} | "
         f"degen={config.get('signals', {}).get('degen_mode', True)} | fee={fee_rate:.1%}"
     )
 
     while not _shutdown:
         try:
+            # Tick day boundary even while paused (UTC)
+            risk.update_bankroll(risk.bankroll)
+
             if risk.paused:
-                logger.warning(f"PAUSED: {risk.pause_reason}")
-                time.sleep(45)
+                now_t = time.time()
+                # Log at most once per 10 minutes — was spamming every 45s
+                if now_t - last_pause_log > 600:
+                    logger.warning(
+                        f"PAUSED: {risk.pause_reason} | bank=${risk.bankroll:.2f} "
+                        f"peak=${risk.peak_bankroll:.2f} | sleeping (clears next UTC day or Restart)"
+                    )
+                    last_pause_log = now_t
+                time.sleep(120)
                 continue
 
             now = time.time()
@@ -359,7 +381,6 @@ def run_paper(config: dict):
                 })
                 cycles_since_save = 0
 
-            # Every ~30 cycles dump timing aggregates (needs resolved trades)
             if cycles_since_timing >= 30:
                 cycles_since_timing = 0
                 ts = trade_log.timing_summary(min_trades=3)
