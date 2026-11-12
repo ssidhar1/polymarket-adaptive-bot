@@ -1,11 +1,11 @@
 bankroll: 1000.0
 
 risk:
-  max_position_pct: 0.06
-  max_concurrent: 6
-  daily_loss_limit_pct: 0.10
-  max_drawdown_pct: 0.18
-  min_edge_after_fees: 0.012
+  max_position_pct: 0.05
+  max_concurrent: 5
+  daily_loss_limit_pct: 0.08
+  max_drawdown_pct: 0.15
+  min_edge_after_fees: 0.02
 
 markets:
   targets:
@@ -18,19 +18,22 @@ markets:
 signals:
   min_score: 0.55
   degen_mode: true
+  fee_rate: 0.01
+  max_entry_price: 0.58
+  min_abs_momentum: 0.12
   lookback_minutes: 30
   min_depth_usd: 25.0
-  min_time_remaining_pct: 0.10
-  max_time_remaining_pct: 0.92
+  min_time_remaining_pct: 0.12
+  max_time_remaining_pct: 0.90
 
 learning:
   calibration_window: 150
   regime_lookback: 40
-  exploration_pct: 0.08
+  exploration_pct: 0.06
 
 execution:
   prefer_maker: true
-  max_slippage_bps: 30
+  max_slippage_bps: 20
   cycle_seconds: 10
   cooldown_seconds: 60
   max_markets_per_cycle: 12
