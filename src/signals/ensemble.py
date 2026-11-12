@@ -1,5 +1,6 @@
 """
 Advanced signal ensemble + structural edge detectors.
+Profitability-first: reject negative EV after fees, prefer cheap shares.
 """
 from typing import Dict, Optional
 import numpy as np
@@ -13,11 +14,14 @@ class EnsembleSignal:
         sig = config.get("signals", {})
         risk = config.get("risk", {})
         self.min_score = sig.get("min_score", 0.55)
-        self.min_edge = risk.get("min_edge_after_fees", 0.012)
-        self.fee_buffer = 0.02
+        self.min_edge = risk.get("min_edge_after_fees", 0.02)
+        self.fee_rate = float(sig.get("fee_rate", 0.01))
+        self.fee_buffer = self.fee_rate * 2  # both legs for complete-set
         self.min_depth_usd = sig.get("min_depth_usd", 25.0)
         self.min_time_remaining = sig.get("min_time_remaining_pct", 0.10)
-        self.max_time_remaining = sig.get("max_time_remaining_pct", 0.95)
+        self.max_time_remaining = sig.get("max_time_remaining_pct", 0.92)
+        self.max_entry = float(sig.get("max_entry_price", 0.58))
+        self.min_abs_momentum = float(sig.get("min_abs_momentum", 0.12))
         self.degen = bool(sig.get("degen_mode", True))
         self.reject_counts: Dict[str, int] = {}
 
@@ -45,7 +49,6 @@ class EnsembleSignal:
         up_ask: Optional[float] = None,
         down_ask: Optional[float] = None,
     ) -> Optional[Dict]:
-        # Prefer asks for realistic buy cost
         up_px = up_ask if up_ask is not None else up_mid
         down_px = down_ask if down_ask is not None else down_mid
         if up_px is None or down_px is None:
@@ -53,15 +56,16 @@ class EnsembleSignal:
         if not (0.02 < up_px < 0.98 and 0.02 < down_px < 0.98):
             return None
         total = up_px + down_px
+        # fee on both buys
         edge = 1.0 - total - self.fee_buffer
-        min_edge = 0.006 if self.degen else 0.008
+        min_edge = 0.01 if self.degen else 0.015
         if edge > min_edge:
             return {
                 "type": "complete_set",
                 "edge": edge,
                 "up_price": up_px,
                 "down_price": down_px,
-                "score": 0.9 + min(0.09, edge * 5),
+                "score": 0.92 + min(0.07, edge * 4),
                 "direction": "both",
                 "est_prob": None,
                 "pass": True,
@@ -76,6 +80,8 @@ class EnsembleSignal:
         vol = features.get("volatility_regime", "normal")
         mid = features.get("mid_price")
         mid = 0.5 if mid is None else float(mid)
+        ask = features.get("ask_price")
+        entry = float(ask if ask is not None else mid)
         spread = float(features.get("spread", 0.02) or 0.02)
         depth = float(features.get("depth_usd", 0.0) or 0.0)
         window_s = int(features.get("window_seconds", 900) or 900)
@@ -83,74 +89,79 @@ class EnsembleSignal:
         if depth < self.min_depth_usd:
             return self._reject("thin_book")
 
-        if time_left < self.min_time_remaining or remaining_s < 45:
+        if time_left < self.min_time_remaining or remaining_s < 60:
             return self._reject("near_expiry")
 
-        # Too early in a brand-new window: wait for book to form
         if time_left > self.max_time_remaining:
             return self._reject("too_early")
 
-        if mid < 0.06 or mid > 0.94:
+        if entry < 0.05 or entry > 0.95:
             return self._reject("extreme_mid")
 
-        # Direction from momentum + imbalance
-        lean = mom + 0.7 * imb
+        # Cheap-side bias: paying > max_entry rarely leaves room after fees
+        if entry > self.max_entry:
+            return self._reject("expensive_entry")
+
         if preferred_side in ("up", "down"):
             direction = preferred_side
         else:
-            direction = "up" if lean >= 0 else "down"
+            direction = "up" if (mom + 0.7 * imb) >= 0 else "down"
 
-        # For DOWN trades, invert momentum contribution so "price falling" is positive signal
         signed_mom = mom if direction == "up" else -mom
         signed_imb = imb if direction == "up" else -imb
 
-        # Short windows weight short TF harder (mom already is MTF combined)
-        short_w = 0.50 if window_s <= 360 else 0.38
-        imb_w = 0.28 if window_s <= 360 else 0.32
+        # Require some directional conviction — pure noise is -EV after fees
+        if abs(signed_mom) < self.min_abs_momentum and abs(signed_imb) < 0.15:
+            return self._reject("weak_signal")
 
-        # Prefer mid-window and mid-range prices (more room for edge)
-        time_term = 1.0 - abs(time_left - 0.45)
-        mid_term = 1.0 - abs(mid - 0.5) * 1.6  # peak near 0.5
+        short_w = 0.52 if window_s <= 360 else 0.40
+        imb_w = 0.26 if window_s <= 360 else 0.30
+
+        time_term = 1.0 - abs(time_left - 0.40)
+        # Prefer cheaper shares slightly
+        cheap_term = max(0.0, (0.55 - entry) / 0.55)
 
         raw = (
             short_w * signed_mom
             + imb_w * signed_imb
-            + 0.14 * time_term
-            + 0.10 * mid_term
+            + 0.12 * time_term
+            + 0.10 * cheap_term
         )
 
-        # Bias toward actionable range when degen
         if self.degen:
-            raw += 0.04 * abs(signed_mom)
+            raw += 0.03 * max(0.0, signed_mom)
 
         if vol == "high":
-            raw *= 0.85
+            raw *= 0.88
         elif vol == "low":
-            raw *= 1.06
+            raw *= 1.05
 
         if spread > 0.05:
-            raw *= 0.80
+            raw *= 0.82
         elif spread > 0.03:
-            raw *= 0.90
+            raw *= 0.92
 
-        # Map raw roughly from [-1,1] toward [0,1] score
         score = float(np.clip(0.5 + raw * 0.55, 0.0, 1.0))
 
-        strength = abs(score - 0.5) * 1.5
-        est_prob = float(np.clip(0.5 + strength, 0.05, 0.95))
+        # est_prob: blend score strength with market-implied (1-ish from cheapness)
+        strength = max(0.0, score - 0.5) * 1.2
+        # market implies ~entry chance for this side; we claim modest lift from signal
+        est_prob = float(np.clip(entry + 0.03 + strength * 0.25, 0.05, 0.95))
 
-        # Edge vs market price of chosen side
-        edge = est_prob - mid
-        if edge < (0.01 if self.degen else 0.015):
-            # still allow high-score passes through min_score gate
-            pass
+        # HARD EV gate after fees — this is the main profitability filter
+        edge_after_fees = est_prob - entry - self.fee_rate
+        min_edge = self.min_edge if not self.degen else max(0.015, self.min_edge * 0.75)
+        if edge_after_fees < min_edge:
+            return self._reject("neg_ev")
 
         return {
             "type": "directional",
             "score": score,
             "direction": direction,
             "est_prob": est_prob,
-            "pass": score >= self.min_score,
+            "edge_after_fees": edge_after_fees,
+            "entry": entry,
+            "pass": score >= self.min_score and edge_after_fees >= min_edge,
             "components": {
                 "momentum": signed_mom,
                 "imbalance": signed_imb,
@@ -159,6 +170,7 @@ class EnsembleSignal:
                 "spread": spread,
                 "depth": depth,
                 "raw": raw,
+                "edge": edge_after_fees,
             },
         }
 
