@@ -1,8 +1,9 @@
 """
 Position tracker + resolution logic for paper (and later live) trades.
 Captures entry timing fields for later hour/weekday edge analysis.
+Supports serialize/restore so restarts don't orphan open paper positions.
 """
-from dataclasses import dataclass, field
+from dataclasses import dataclass, asdict
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timezone, timedelta
 import logging
@@ -24,24 +25,24 @@ class OpenPosition:
     opened_at: datetime
     slug: str = ""
     end_date: Optional[str] = None
-    # Timing / signal meta for tuning
     asset: str = ""
-    window: str = ""  # 5m / 15m
+    window: str = ""
     hour_utc: int = -1
-    weekday_utc: int = -1  # Mon=0 .. Sun=6
+    weekday_utc: int = -1
     time_remaining_s: float = 0.0
     time_remaining_pct: float = 0.0
     score: float = 0.0
     edge_after_fees: float = 0.0
     momentum: float = 0.0
     regime: str = ""
-    trade_type: str = "dir"  # dir | arb | expl
+    trade_type: str = "dir"
 
 
 class PositionTracker:
-    def __init__(self):
+    def __init__(self, max_closed: int = 500):
         self.open: Dict[str, OpenPosition] = {}
         self.closed: List[Dict] = []
+        self.max_closed = max_closed
 
     def add(
         self,
@@ -120,6 +121,8 @@ class PositionTracker:
             "win": 1 if pnl > 0 else 0,
         }
         self.closed.append(record)
+        if len(self.closed) > self.max_closed:
+            self.closed = self.closed[-self.max_closed :]
         logger.info(
             f"Resolved {order_id} | pnl=${pnl:.3f} | "
             f"h={pos.hour_utc} wd={pos.weekday_utc} win={pos.window} hold={hold_s:.0f}s"
@@ -155,3 +158,77 @@ class PositionTracker:
             "total_pnl": total_pnl,
             "win_rate": wins / n if n else 0.0,
         }
+
+    def export_open(self) -> List[Dict]:
+        out = []
+        for pos in self.open.values():
+            d = {
+                "order_id": pos.order_id,
+                "market_id": pos.market_id,
+                "token_id": pos.token_id,
+                "direction": pos.direction,
+                "side": pos.side,
+                "entry_price": pos.entry_price,
+                "size_usd": pos.size_usd,
+                "shares": pos.shares,
+                "fee": pos.fee,
+                "opened_at": pos.opened_at.isoformat(),
+                "slug": pos.slug,
+                "end_date": pos.end_date,
+                "asset": pos.asset,
+                "window": pos.window,
+                "hour_utc": pos.hour_utc,
+                "weekday_utc": pos.weekday_utc,
+                "time_remaining_s": pos.time_remaining_s,
+                "time_remaining_pct": pos.time_remaining_pct,
+                "score": pos.score,
+                "edge_after_fees": pos.edge_after_fees,
+                "momentum": pos.momentum,
+                "regime": pos.regime,
+                "trade_type": pos.trade_type,
+            }
+            out.append(d)
+        return out
+
+    def import_open(self, rows: List[Dict]):
+        if not rows:
+            return
+        restored = 0
+        for r in rows:
+            try:
+                opened_raw = r.get("opened_at") or datetime.now(timezone.utc).isoformat()
+                if isinstance(opened_raw, str):
+                    opened = datetime.fromisoformat(opened_raw.replace("Z", "+00:00"))
+                else:
+                    opened = datetime.now(timezone.utc)
+                pos = OpenPosition(
+                    order_id=str(r["order_id"]),
+                    market_id=str(r.get("market_id") or ""),
+                    token_id=str(r.get("token_id") or ""),
+                    direction=str(r.get("direction") or "up"),
+                    side=str(r.get("side") or "buy"),
+                    entry_price=float(r.get("entry_price") or 0),
+                    size_usd=float(r.get("size_usd") or 0),
+                    shares=float(r.get("shares") or 0),
+                    fee=float(r.get("fee") or 0),
+                    opened_at=opened,
+                    slug=str(r.get("slug") or ""),
+                    end_date=r.get("end_date"),
+                    asset=str(r.get("asset") or ""),
+                    window=str(r.get("window") or ""),
+                    hour_utc=int(r.get("hour_utc") if r.get("hour_utc") is not None else -1),
+                    weekday_utc=int(r.get("weekday_utc") if r.get("weekday_utc") is not None else -1),
+                    time_remaining_s=float(r.get("time_remaining_s") or 0),
+                    time_remaining_pct=float(r.get("time_remaining_pct") or 0),
+                    score=float(r.get("score") or 0),
+                    edge_after_fees=float(r.get("edge_after_fees") or 0),
+                    momentum=float(r.get("momentum") or 0),
+                    regime=str(r.get("regime") or ""),
+                    trade_type=str(r.get("trade_type") or "dir"),
+                )
+                self.open[pos.order_id] = pos
+                restored += 1
+            except Exception as e:
+                logger.warning(f"Skip bad open position restore: {e}")
+        if restored:
+            logger.info(f"Restored {restored} open positions from state")
