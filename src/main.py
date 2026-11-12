@@ -40,7 +40,10 @@ def load_config(path: str = "config.yaml") -> dict:
     if not Path(path).exists():
         path = "config.example.yaml"
     with open(path) as f:
-        return yaml.safe_load(f)
+        cfg = yaml.safe_load(f)
+    if not isinstance(cfg, dict):
+        raise SystemExit(f"Invalid config at {path}")
+    return cfg
 
 
 def run_paper(config: dict):
@@ -100,7 +103,8 @@ def run_paper(config: dict):
 
             for pos in list(tracker.get_open_list()):
                 closed, up_p, down_p = resolver.check(
-                    slug=pos.slug or None, market_id=pos.market_id or None
+                    slug=pos.slug or None,
+                    market_id=pos.market_id or None,
                 )
                 if closed and up_p is not None:
                     final = resolver.token_final_price(pos.direction, up_p, down_p)
@@ -123,7 +127,6 @@ def run_paper(config: dict):
                         continue
 
                 if tracker.is_stale(pos):
-                    # Mark mid-ish rather than forced 0.5 when unknown — still fees hurt
                     trade = tracker.resolve(pos.order_id, 0.5)
                     if trade:
                         risk.record_pnl(trade["pnl"])
@@ -159,13 +162,19 @@ def run_paper(config: dict):
                     if not up_token or not down_token:
                         continue
 
-                    mid_id = str(m.get("id") or m.get("slug") or "")
+                    # Prefer slug as stable market key (ids can be awkward)
+                    slug = m.get("slug") or ""
+                    mid_id = slug or str(m.get("id") or "")
                     if not mid_id:
                         continue
 
                     if cooldown_until.get(mid_id, 0) > now:
                         continue
-                    if any(p.market_id == mid_id for p in tracker.get_open_list()):
+                    if any(
+                        (p.slug and p.slug == slug)
+                        or p.market_id == mid_id
+                        for p in tracker.get_open_list()
+                    ):
                         continue
 
                     book_up = data.get_order_book(up_token)
@@ -174,6 +183,12 @@ def run_paper(config: dict):
                     down_mid = book_down.get("mid")
                     up_ask = book_up.get("best_ask") or best_ask(book_up)
                     down_ask = book_down.get("best_ask") or best_ask(book_down)
+
+                    # No book → cannot price safely
+                    if (up_ask is None and up_mid is None) or (
+                        down_ask is None and down_mid is None
+                    ):
+                        continue
 
                     hist = list(price_history.get(asset, []))
                     mtf = prices.multi_timeframe_momentum(asset)
@@ -203,7 +218,7 @@ def run_paper(config: dict):
                                 tracker.add(
                                     order,
                                     direction=side,
-                                    slug=m.get("slug", ""),
+                                    slug=slug,
                                     end_date=m.get("endDate") or m.get("end_date_iso"),
                                 )
                                 score_map[order["order_id"]] = arb["score"]
@@ -212,7 +227,7 @@ def run_paper(config: dict):
                             trades_this_cycle += 1
                             logger.info(
                                 f"ARB SET | edge={arb['edge']:.3f} | size=${size:.1f} | "
-                                f"{m.get('slug','')[:40]}"
+                                f"{slug[:40]}"
                             )
                             continue
 
@@ -221,16 +236,18 @@ def run_paper(config: dict):
 
                     candidates = []
                     for sig, feat, token, entry_px in [
-                        (sig_up, feat_up, up_token, up_ask or up_mid),
-                        (sig_dn, feat_dn, down_token, down_ask or down_mid),
+                        (sig_up, feat_up, up_token, up_ask if up_ask is not None else up_mid),
+                        (sig_dn, feat_dn, down_token, down_ask if down_ask is not None else down_mid),
                     ]:
+                        if entry_px is None:
+                            continue
                         if not sig.get("pass") and not (
                             learner.get_regime() == "favorable"
                             and sig.get("score", 0) > ensemble.min_score - 0.06
                             and (sig.get("edge_after_fees") or 0) > 0.01
                         ):
                             continue
-                        candidates.append((sig, feat, token, entry_px))
+                        candidates.append((sig, feat, token, float(entry_px)))
 
                     if not candidates:
                         continue
@@ -242,15 +259,10 @@ def run_paper(config: dict):
                         ),
                         reverse=True,
                     )
-                    sig, feat, token, entry_px = candidates[0]
+                    sig, feat, token, entry = candidates[0]
 
                     is_expl = not sig.get("pass")
                     direction = sig["direction"]
-                    entry = float(
-                        entry_px
-                        if entry_px is not None
-                        else (sig.get("entry") or feat.get("mid_price") or 0.5)
-                    )
                     edge = sig.get("edge_after_fees")
 
                     size = risk.size_position(
@@ -269,7 +281,7 @@ def run_paper(config: dict):
                     tracker.add(
                         order,
                         direction=direction,
-                        slug=m.get("slug", ""),
+                        slug=slug,
                         end_date=m.get("endDate") or m.get("end_date_iso"),
                     )
                     score_map[order["order_id"]] = sig["score"]
@@ -284,7 +296,7 @@ def run_paper(config: dict):
                         f"{tag} {direction.upper()} | score={sig['score']:.3f} | "
                         f"entry={entry:.3f} | edge={edge if edge is not None else 0:.3f} | "
                         f"mom={mom:.2f} (1m={mtf['m1']:.2f} 5m={mtf['m5']:.2f} 15m={mtf['m15']:.2f}) | "
-                        f"size=${size:.1f} | {m.get('slug','')[:40]}"
+                        f"size=${size:.1f} | {slug[:40]}"
                     )
 
                 rejects = ensemble.pop_reject_summary()
