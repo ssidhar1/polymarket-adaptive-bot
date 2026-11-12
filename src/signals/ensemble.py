@@ -56,7 +56,6 @@ class EnsembleSignal:
         if not (0.02 < up_px < 0.98 and 0.02 < down_px < 0.98):
             return None
         total = up_px + down_px
-        # fee on both buys
         edge = 1.0 - total - self.fee_buffer
         min_edge = 0.01 if self.degen else 0.015
         if edge > min_edge:
@@ -98,7 +97,6 @@ class EnsembleSignal:
         if entry < 0.05 or entry > 0.95:
             return self._reject("extreme_mid")
 
-        # Cheap-side bias: paying > max_entry rarely leaves room after fees
         if entry > self.max_entry:
             return self._reject("expensive_entry")
 
@@ -110,7 +108,6 @@ class EnsembleSignal:
         signed_mom = mom if direction == "up" else -mom
         signed_imb = imb if direction == "up" else -imb
 
-        # Require some directional conviction — pure noise is -EV after fees
         if abs(signed_mom) < self.min_abs_momentum and abs(signed_imb) < 0.15:
             return self._reject("weak_signal")
 
@@ -118,7 +115,6 @@ class EnsembleSignal:
         imb_w = 0.26 if window_s <= 360 else 0.30
 
         time_term = 1.0 - abs(time_left - 0.40)
-        # Prefer cheaper shares slightly
         cheap_term = max(0.0, (0.55 - entry) / 0.55)
 
         raw = (
@@ -143,12 +139,15 @@ class EnsembleSignal:
 
         score = float(np.clip(0.5 + raw * 0.55, 0.0, 1.0))
 
-        # est_prob: blend score strength with market-implied (1-ish from cheapness)
-        strength = max(0.0, score - 0.5) * 1.2
-        # market implies ~entry chance for this side; we claim modest lift from signal
-        est_prob = float(np.clip(entry + 0.03 + strength * 0.25, 0.05, 0.95))
+        # Honest est_prob: market price is the baseline; only claim lift from
+        # *positive* signed signal strength — no fixed +0.03 pad.
+        # strength in [0, 1] from signed_mom/imb; max lift capped small.
+        signal_strength = max(0.0, 0.6 * signed_mom + 0.4 * signed_imb)
+        signal_strength = float(np.clip(signal_strength, 0.0, 1.0))
+        max_lift = 0.08 if self.degen else 0.06
+        lift = signal_strength * max_lift
+        est_prob = float(np.clip(entry + lift, 0.05, 0.95))
 
-        # HARD EV gate after fees — this is the main profitability filter
         edge_after_fees = est_prob - entry - self.fee_rate
         min_edge = self.min_edge if not self.degen else max(0.015, self.min_edge * 0.75)
         if edge_after_fees < min_edge:
@@ -170,6 +169,7 @@ class EnsembleSignal:
                 "spread": spread,
                 "depth": depth,
                 "raw": raw,
+                "lift": lift,
                 "edge": edge_after_fees,
             },
         }
