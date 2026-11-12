@@ -64,7 +64,8 @@ def run_paper(config: dict):
     learner = AdaptiveLearner(config)
     learner.import_state(saved.get("learner") or {})
 
-    executor = PaperExecutor()
+    fee_rate = float(config.get("signals", {}).get("fee_rate", 0.01))
+    executor = PaperExecutor(fee_rate=fee_rate)
     tracker = PositionTracker()
     trade_log = TradeLogger()
 
@@ -80,7 +81,7 @@ def run_paper(config: dict):
     logger.info(
         f"Bankroll ${risk.bankroll:.2f} | assets={assets} | "
         f"min_score={learner.get_min_score():.3f} | regime={learner.get_regime()} | "
-        f"degen={config.get('signals', {}).get('degen_mode', True)}"
+        f"degen={config.get('signals', {}).get('degen_mode', True)} | fee={fee_rate:.1%}"
     )
 
     while not _shutdown:
@@ -97,7 +98,6 @@ def run_paper(config: dict):
 
             ensemble.min_score = learner.get_min_score()
 
-            # --- resolve open positions ---
             for pos in list(tracker.get_open_list()):
                 closed, up_p, down_p = resolver.check(
                     slug=pos.slug or None, market_id=pos.market_id or None
@@ -123,6 +123,7 @@ def run_paper(config: dict):
                         continue
 
                 if tracker.is_stale(pos):
+                    # Mark mid-ish rather than forced 0.5 when unknown — still fees hurt
                     trade = tracker.resolve(pos.order_id, 0.5)
                     if trade:
                         risk.record_pnl(trade["pnl"])
@@ -178,17 +179,18 @@ def run_paper(config: dict):
                     mtf = prices.multi_timeframe_momentum(asset)
                     mom = prices.momentum(asset, hist)
 
-                    # Score both sides with the correct book; pick the stronger pass
                     feat_up = build_features(m, book_up, external_momentum=mom, side="up")
                     feat_dn = build_features(m, book_down, external_momentum=mom, side="down")
 
-                    # Arb check first (uses asks when available)
                     arb = ensemble.complete_set_arb(
                         up_mid, down_mid, up_ask=up_ask, down_ask=down_ask
                     )
                     if arb:
-                        size = risk.size_position(arb["score"], is_exploration=False)
-                        if risk.can_open(size, open_count=open_n) and risk.can_open(
+                        size = risk.size_position(
+                            arb["score"],
+                            edge_after_fees=arb.get("edge"),
+                        )
+                        if size > 0 and risk.can_open(size, open_count=open_n) and risk.can_open(
                             size, open_count=open_n + 1
                         ):
                             for side, token, price in [
@@ -196,7 +198,7 @@ def run_paper(config: dict):
                                 ("down", down_token, arb["down_price"]),
                             ]:
                                 order = executor.place_order(
-                                    token, "buy", price, size, mid_id
+                                    token, "buy", price, size, mid_id, already_aggressive=True
                                 )
                                 tracker.add(
                                     order,
@@ -218,38 +220,52 @@ def run_paper(config: dict):
                     sig_dn = ensemble.directional_score(feat_dn, preferred_side="down")
 
                     candidates = []
-                    if sig_up.get("pass") or (
-                        learner.get_regime() == "favorable"
-                        and sig_up.get("score", 0) > ensemble.min_score - 0.08
-                    ):
-                        candidates.append((sig_up, feat_up, up_token, up_ask or up_mid))
-                    if sig_dn.get("pass") or (
-                        learner.get_regime() == "favorable"
-                        and sig_dn.get("score", 0) > ensemble.min_score - 0.08
-                    ):
-                        candidates.append((sig_dn, feat_dn, down_token, down_ask or down_mid))
+                    for sig, feat, token, entry_px in [
+                        (sig_up, feat_up, up_token, up_ask or up_mid),
+                        (sig_dn, feat_dn, down_token, down_ask or down_mid),
+                    ]:
+                        if not sig.get("pass") and not (
+                            learner.get_regime() == "favorable"
+                            and sig.get("score", 0) > ensemble.min_score - 0.06
+                            and (sig.get("edge_after_fees") or 0) > 0.01
+                        ):
+                            continue
+                        candidates.append((sig, feat, token, entry_px))
 
                     if not candidates:
                         continue
 
-                    # Highest score wins
-                    candidates.sort(key=lambda x: x[0].get("score", 0), reverse=True)
+                    candidates.sort(
+                        key=lambda x: (
+                            x[0].get("edge_after_fees") or 0,
+                            x[0].get("score", 0),
+                        ),
+                        reverse=True,
+                    )
                     sig, feat, token, entry_px = candidates[0]
 
                     is_expl = not sig.get("pass")
                     direction = sig["direction"]
-                    entry = float(entry_px if entry_px is not None else (feat.get("mid_price") or 0.5))
+                    entry = float(
+                        entry_px
+                        if entry_px is not None
+                        else (sig.get("entry") or feat.get("mid_price") or 0.5)
+                    )
+                    edge = sig.get("edge_after_fees")
 
                     size = risk.size_position(
                         confidence=sig["score"],
                         est_prob=sig.get("est_prob"),
                         price=entry,
                         is_exploration=is_expl,
+                        edge_after_fees=edge,
                     )
                     if size <= 0 or not risk.can_open(size, open_count=open_n):
                         continue
 
-                    order = executor.place_order(token, "buy", entry, size, mid_id)
+                    order = executor.place_order(
+                        token, "buy", entry, size, mid_id, already_aggressive=True
+                    )
                     tracker.add(
                         order,
                         direction=direction,
@@ -266,15 +282,15 @@ def run_paper(config: dict):
                     tag = "EXPL" if is_expl else "DIR"
                     logger.info(
                         f"{tag} {direction.upper()} | score={sig['score']:.3f} | "
-                        f"entry={entry:.3f} | mom={mom:.2f} "
-                        f"(1m={mtf['m1']:.2f} 5m={mtf['m5']:.2f} 15m={mtf['m15']:.2f}) | "
+                        f"entry={entry:.3f} | edge={edge if edge is not None else 0:.3f} | "
+                        f"mom={mom:.2f} (1m={mtf['m1']:.2f} 5m={mtf['m5']:.2f} 15m={mtf['m15']:.2f}) | "
                         f"size=${size:.1f} | {m.get('slug','')[:40]}"
                     )
 
                 rejects = ensemble.pop_reject_summary()
                 reject_str = ""
                 if rejects:
-                    top = sorted(rejects.items(), key=lambda x: -x[1])[:4]
+                    top = sorted(rejects.items(), key=lambda x: -x[1])[:5]
                     reject_str = " | rej " + ",".join(f"{k}={v}" for k, v in top)
 
                 summary = tracker.summary()
