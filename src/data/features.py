@@ -9,7 +9,6 @@ logger = logging.getLogger("astf.features")
 
 
 def _level_price(level: Any) -> float:
-    """Support both {price, size} dicts and [price, size] lists."""
     try:
         if isinstance(level, dict):
             return float(level.get("price", 0) or 0)
@@ -33,8 +32,10 @@ def _level_size(level: Any) -> float:
 
 def detect_window_seconds(slug: Optional[str], question: Optional[str] = None) -> int:
     text = f"{slug or ''} {question or ''}".lower()
-    if "5m" in text or "5 min" in text or "5-minute" in text:
+    if "5m" in text or "5 min" in text or "5-minute" in text or "5-min" in text:
         return 5 * 60
+    if "15m" in text or "15 min" in text or "15-minute" in text or "15-min" in text:
+        return 15 * 60
     return 15 * 60
 
 
@@ -44,7 +45,9 @@ def compute_time_remaining_pct(end_date_iso: Optional[str], window_seconds: int 
     try:
         end = datetime.fromisoformat(end_date_iso.replace("Z", "+00:00"))
         now = datetime.now(timezone.utc)
-        remaining = max(0.0, (end - now).total_seconds())
+        remaining = (end - now).total_seconds()
+        if remaining <= 0:
+            return 0.0
         return min(1.0, remaining / max(window_seconds, 1))
     except Exception:
         return 0.5
@@ -60,7 +63,6 @@ def compute_book_imbalance(bids: list, asks: list, levels: int = 5) -> float:
 
 
 def compute_depth_usd(bids: list, asks: list, levels: int = 5) -> float:
-    """Approximate top-of-book notional depth."""
     depth = 0.0
     for b in bids[:levels]:
         depth += _level_price(b) * _level_size(b)
@@ -69,7 +71,30 @@ def compute_depth_usd(bids: list, asks: list, levels: int = 5) -> float:
     return depth
 
 
-def build_features(market: Dict, book: Dict, external_momentum: float = 0.0) -> Dict:
+def best_ask(book: Dict) -> Optional[float]:
+    asks = book.get("asks") or []
+    if not asks:
+        return book.get("mid")
+    return _level_price(asks[0]) or book.get("mid")
+
+
+def best_bid(book: Dict) -> Optional[float]:
+    bids = book.get("bids") or []
+    if not bids:
+        return book.get("mid")
+    return _level_price(bids[0]) or book.get("mid")
+
+
+def build_features(
+    market: Dict,
+    book: Dict,
+    external_momentum: float = 0.0,
+    side: str = "up",
+) -> Dict:
+    """
+    Build features from the book of the side we care about.
+    For DOWN tokens, pass the down book so imbalance/depth match the trade.
+    """
     bids = book.get("bids", []) or []
     asks = book.get("asks", []) or []
 
@@ -77,11 +102,15 @@ def build_features(market: Dict, book: Dict, external_momentum: float = 0.0) -> 
     if mid is None and bids and asks:
         mid = (_level_price(bids[0]) + _level_price(asks[0])) / 2
 
+    ask = best_ask(book)
+    bid = best_bid(book)
+
     slug = market.get("slug") or market.get("market_slug") or ""
     question = market.get("question") or ""
     window_s = detect_window_seconds(slug, question)
     end_iso = market.get("endDate") or market.get("end_date_iso")
     time_pct = compute_time_remaining_pct(end_iso, window_s)
+    remaining_s = time_pct * window_s
 
     imbalance = compute_book_imbalance(bids, asks)
     depth = compute_depth_usd(bids, asks)
@@ -102,9 +131,13 @@ def build_features(market: Dict, book: Dict, external_momentum: float = 0.0) -> 
         "book_imbalance": imbalance,
         "volatility_regime": vol_regime,
         "time_remaining_pct": time_pct,
+        "time_remaining_s": remaining_s,
         "mid_price": mid,
+        "ask_price": ask,
+        "bid_price": bid,
         "spread": spread,
         "depth_usd": depth,
         "window_seconds": window_s,
         "market_slug": slug,
+        "side": side,
     }
