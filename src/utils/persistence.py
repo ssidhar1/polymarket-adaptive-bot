@@ -1,6 +1,5 @@
 """
 SQLite trade persistence + summaries.
-Falls back gracefully; also mirrors last N rows conceptually for reports.
 """
 import sqlite3
 from pathlib import Path
@@ -80,7 +79,8 @@ class TradeLogger:
         logger.debug(f"SQLite logged {row[1]} pnl={row[10]:.4f}")
 
     def daily_summary(self, day: Optional[date] = None) -> Dict:
-        day = day or date.today()
+        # Trade timestamps are UTC ISO; match on UTC calendar day
+        day = day or datetime.now(timezone.utc).date()
         prefix = day.isoformat()
         with self._connect() as conn:
             cur = conn.execute(
