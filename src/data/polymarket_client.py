@@ -7,6 +7,7 @@ from typing import List, Dict, Optional, Any, Tuple
 import json
 import logging
 import time
+import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, timezone
 import requests
@@ -53,7 +54,7 @@ def _end_ts(iso: Optional[str]) -> float:
 
 def _build_session() -> requests.Session:
     s = requests.Session()
-    s.headers.update({"User-Agent": "astf-bot/0.6"})
+    s.headers.update({"User-Agent": "astf-bot/0.7"})
     retry = Retry(
         total=2,
         backoff_factor=0.3,
@@ -69,15 +70,16 @@ def _build_session() -> requests.Session:
 class PolymarketData:
     def __init__(self):
         self.session = _build_session()
+        self._lock = threading.Lock()
         logger.info("PolymarketData initialized (parallel slug discovery + CLOB)")
+
+    def _get(self, url: str, params: dict = None, timeout: int = 8):
+        with self._lock:
+            return self.session.get(url, params=params or {}, timeout=timeout)
 
     def _market_by_slug(self, slug: str) -> Optional[Dict]:
         try:
-            r = self.session.get(
-                f"{GAMMA}/markets",
-                params={"slug": slug},
-                timeout=8,
-            )
+            r = self._get(f"{GAMMA}/markets", params={"slug": slug}, timeout=8)
             r.raise_for_status()
             data = r.json()
             if isinstance(data, list) and data:
@@ -97,7 +99,6 @@ class PolymarketData:
                 continue
             for label, step in WINDOWS:
                 base = (now_i // step) * step
-                # current + next few only (previous often already ending)
                 for i in range(0, 4):
                     ts = base + i * step
                     slug = f"{asset}-updown-{label}-{ts}"
@@ -117,10 +118,9 @@ class PolymarketData:
         if end_t == float("inf"):
             end_t = float(win_start + step)
 
-        # Live / near-live only
         if end_t < now + 45:
             return None
-        if end_t > now + 45 * 60:  # >45 min out — skip
+        if end_t > now + 45 * 60:
             return None
 
         token_ids = m.get("clobTokenIds")
@@ -153,8 +153,7 @@ class PolymarketData:
         results: List[Dict] = []
         seen = set()
 
-        # Parallel fetch — serial was 15–25s and starved the loop
-        with ThreadPoolExecutor(max_workers=12) as pool:
+        with ThreadPoolExecutor(max_workers=8) as pool:
             futs = {pool.submit(self._hydrate, c, now): c[2] for c in candidates}
             for fut in as_completed(futs):
                 try:
@@ -182,7 +181,7 @@ class PolymarketData:
 
     def get_order_book(self, token_id: str) -> Dict:
         try:
-            r = self.session.get(f"{CLOB}/book", params={"token_id": token_id}, timeout=8)
+            r = self._get(f"{CLOB}/book", params={"token_id": token_id}, timeout=8)
             r.raise_for_status()
             data = r.json()
             bids = _parse_book_levels(data.get("bids", []))
