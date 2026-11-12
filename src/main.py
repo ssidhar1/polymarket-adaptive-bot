@@ -71,6 +71,16 @@ def _timing_meta(m: dict, feat: dict, score: float, edge: float, mom: float, reg
     }
 
 
+def _save_state(state: StateStore, risk: RiskManager, learner: AdaptiveLearner, tracker: PositionTracker):
+    state.save({
+        "bankroll": risk.bankroll,
+        "peak_bankroll": risk.peak_bankroll,
+        "learner": learner.export_state(),
+        "open_count": tracker.open_count(),
+        "open_positions": tracker.export_open(),
+    })
+
+
 def run_paper(config: dict):
     global _shutdown
     os_signal.signal(os_signal.SIGINT, _handle_signal)
@@ -84,7 +94,6 @@ def run_paper(config: dict):
     state = StateStore()
     saved = state.load()
 
-    # Full paper bankroll reset (optional env)
     if os.getenv("PAPER_RESET_BANKROLL", "").lower() in ("1", "true", "yes"):
         start_bank = float(config.get("bankroll", 1000.0))
         logger.warning(f"PAPER_RESET_BANKROLL: starting fresh at ${start_bank:.2f}")
@@ -96,8 +105,6 @@ def run_paper(config: dict):
     if saved.get("peak_bankroll") and not os.getenv("PAPER_RESET_BANKROLL"):
         risk.peak_bankroll = float(saved["peak_bankroll"])
 
-    # Process restart → daily_pnl is 0; clear any stale daily pause concept
-    # (drawdown pause only applies after fresh losses or if bank << peak beyond max_dd)
     risk.clear_daily_pause("service restart")
 
     learner = AdaptiveLearner(config)
@@ -106,6 +113,9 @@ def run_paper(config: dict):
     fee_rate = float(config.get("signals", {}).get("fee_rate", 0.01))
     executor = PaperExecutor(fee_rate=fee_rate)
     tracker = PositionTracker()
+    if saved.get("open_positions") and not os.getenv("PAPER_RESET_BANKROLL"):
+        tracker.import_open(saved["open_positions"])
+
     trade_log = TradeLogger()
 
     assets = config.get("markets", {}).get("targets", ["btc", "eth"])
@@ -119,19 +129,18 @@ def run_paper(config: dict):
     last_pause_log = 0.0
 
     logger.info(
-        f"Bankroll ${risk.bankroll:.2f} | peak=${risk.peak_bankroll:.2f} | assets={assets} | "
+        f"Bankroll ${risk.bankroll:.2f} | peak=${risk.peak_bankroll:.2f} | "
+        f"open_restored={tracker.open_count()} | assets={assets} | "
         f"min_score={learner.get_min_score():.3f} | regime={learner.get_regime()} | "
         f"degen={config.get('signals', {}).get('degen_mode', True)} | fee={fee_rate:.1%}"
     )
 
     while not _shutdown:
         try:
-            # Tick day boundary even while paused (UTC)
             risk.update_bankroll(risk.bankroll)
 
             if risk.paused:
                 now_t = time.time()
-                # Log at most once per 10 minutes — was spamming every 45s
                 if now_t - last_pause_log > 600:
                     logger.warning(
                         f"PAUSED: {risk.pause_reason} | bank=${risk.bankroll:.2f} "
@@ -248,38 +257,60 @@ def run_paper(config: dict):
                         up_mid, down_mid, up_ask=up_ask, down_ask=down_ask
                     )
                     if arb:
-                        size = risk.size_position(
+                        # Equal-share sizing: N shares each side, total spend ≈ budget
+                        budget = risk.size_position(
                             arb["score"],
                             edge_after_fees=arb.get("edge"),
                         )
-                        if size > 0 and risk.can_open(size, open_count=open_n) and risk.can_open(
-                            size, open_count=open_n + 1
-                        ):
-                            meta = _timing_meta(
-                                m, feat_up, arb["score"], arb.get("edge") or 0, mom, regime, "arb"
-                            )
-                            for side, token, price in [
-                                ("up", up_token, arb["up_price"]),
-                                ("down", down_token, arb["down_price"]),
-                            ]:
-                                order = executor.place_order(
-                                    token, "buy", price, size, mid_id, already_aggressive=True
+                        up_px = float(arb["up_price"])
+                        dn_px = float(arb["down_price"])
+                        pair_cost = up_px + dn_px
+                        if budget > 0 and pair_cost > 0:
+                            n_shares = budget / pair_cost
+                            size_up = n_shares * up_px
+                            size_dn = n_shares * dn_px
+                            # need room for both legs
+                            if (
+                                risk.can_open(size_up, open_count=open_n)
+                                and risk.can_open(size_dn, open_count=open_n + 1)
+                            ):
+                                meta = _timing_meta(
+                                    m,
+                                    feat_up,
+                                    arb["score"],
+                                    arb.get("edge") or 0,
+                                    mom,
+                                    regime,
+                                    "arb",
                                 )
-                                tracker.add(
-                                    order,
-                                    direction=side,
-                                    slug=slug,
-                                    end_date=m.get("endDate") or m.get("end_date_iso"),
-                                    meta=meta,
+                                for side, token, price, sz in [
+                                    ("up", up_token, up_px, size_up),
+                                    ("down", down_token, dn_px, size_dn),
+                                ]:
+                                    order = executor.place_order(
+                                        token,
+                                        "buy",
+                                        price,
+                                        sz,
+                                        mid_id,
+                                        already_aggressive=True,
+                                    )
+                                    tracker.add(
+                                        order,
+                                        direction=side,
+                                        slug=slug,
+                                        end_date=m.get("endDate") or m.get("end_date_iso"),
+                                        meta=meta,
+                                    )
+                                    open_n += 1
+                                cooldown_until[mid_id] = now + cooldown_sec
+                                trades_this_cycle += 1
+                                logger.info(
+                                    f"ARB SET | edge={arb['edge']:.3f} | "
+                                    f"shares≈{n_shares:.1f} | spend=${size_up+size_dn:.1f} | "
+                                    f"h={meta['hour_utc']} win={meta['window']} | {slug[:40]}"
                                 )
-                                open_n += 1
-                            cooldown_until[mid_id] = now + cooldown_sec
-                            trades_this_cycle += 1
-                            logger.info(
-                                f"ARB SET | edge={arb['edge']:.3f} | size=${size:.1f} | "
-                                f"h={meta['hour_utc']} win={meta['window']} | {slug[:40]}"
-                            )
-                            continue
+                                continue
 
                     sig_up = ensemble.directional_score(feat_up, preferred_side="up")
                     sig_dn = ensemble.directional_score(feat_dn, preferred_side="down")
@@ -373,19 +404,16 @@ def run_paper(config: dict):
             cycles_since_save += 1
             cycles_since_timing += 1
             if cycles_since_save >= 5:
-                state.save({
-                    "bankroll": risk.bankroll,
-                    "peak_bankroll": risk.peak_bankroll,
-                    "learner": learner.export_state(),
-                    "open_count": tracker.open_count(),
-                })
+                _save_state(state, risk, learner, tracker)
                 cycles_since_save = 0
 
             if cycles_since_timing >= 30:
                 cycles_since_timing = 0
                 ts = trade_log.timing_summary(min_trades=3)
                 if ts.get("by_hour_utc") or ts.get("by_window"):
-                    logger.info(f"TIMING_SUMMARY hour={ts.get('by_hour_utc')} window={ts.get('by_window')}")
+                    logger.info(
+                        f"TIMING_SUMMARY hour={ts.get('by_hour_utc')} window={ts.get('by_window')}"
+                    )
 
         except Exception as e:
             logger.exception(f"Loop error: {e}")
@@ -393,12 +421,7 @@ def run_paper(config: dict):
         if not _shutdown:
             time.sleep(cycle)
 
-    state.save({
-        "bankroll": risk.bankroll,
-        "peak_bankroll": risk.peak_bankroll,
-        "learner": learner.export_state(),
-        "open_count": tracker.open_count(),
-    })
+    _save_state(state, risk, learner, tracker)
     logger.info("Shutdown complete. State saved.")
 
 
