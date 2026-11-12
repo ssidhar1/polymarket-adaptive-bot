@@ -10,17 +10,33 @@ logger = logging.getLogger("astf.execution.paper")
 
 
 class PaperExecutor:
-    def __init__(self, fee_rate: float = 0.02):
-        self.fee_rate = fee_rate  # approximate taker fee
+    def __init__(self, fee_rate: float = 0.01, extra_slippage: float = 0.0):
+        # ~1% all-in taker-ish cost is closer to many Polymarket short markets
+        # than the old flat 2% which was a silent edge killer.
+        self.fee_rate = fee_rate
+        self.extra_slippage = extra_slippage
         self.open_orders = {}
         self.closed_trades = []
 
     def place_order(
-        self, token_id: str, side: str, price: float, size_usd: float, market_id: str
+        self,
+        token_id: str,
+        side: str,
+        price: float,
+        size_usd: float,
+        market_id: str,
+        already_aggressive: bool = True,
     ) -> Dict:
+        """
+        already_aggressive=True when caller passed best ask/bid already.
+        Avoid stacking another 20bps of phantom slippage on top.
+        """
         order_id = str(uuid.uuid4())[:8]
-        slippage = 0.002 if side == "buy" else -0.002
-        fill_price = max(0.01, min(0.99, float(price) + slippage))
+        px = float(price)
+        if not already_aggressive:
+            slip = self.extra_slippage if self.extra_slippage else 0.002
+            px = px + slip if side == "buy" else px - slip
+        fill_price = max(0.01, min(0.99, px))
 
         cost = float(size_usd)
         shares = cost / fill_price if fill_price > 0 else 0.0
