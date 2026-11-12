@@ -6,6 +6,7 @@ from typing import List, Dict, Optional, Any
 import json
 import logging
 import time
+from datetime import datetime, timezone
 import requests
 
 logger = logging.getLogger("astf.data")
@@ -13,7 +14,6 @@ logger = logging.getLogger("astf.data")
 GAMMA = "https://gamma-api.polymarket.com"
 CLOB = "https://clob.polymarket.com"
 
-# Official recurring series on Polymarket
 SERIES_BY_ASSET = {
     "btc": ["btc-up-or-down-5m", "btc-up-or-down-15m"],
     "eth": ["eth-up-or-down-5m", "eth-up-or-down-15m"],
@@ -37,10 +37,19 @@ def _parse_book_levels(levels: list) -> list:
     return out
 
 
+def _end_ts(iso: Optional[str]) -> float:
+    if not iso:
+        return float("inf")
+    try:
+        return datetime.fromisoformat(iso.replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return float("inf")
+
+
 class PolymarketData:
     def __init__(self):
         self.session = requests.Session()
-        self.session.headers.update({"User-Agent": "astf-bot/0.3"})
+        self.session.headers.update({"User-Agent": "astf-bot/0.4"})
         logger.info("PolymarketData initialized (Gamma series + CLOB)")
 
     def _series_events(self, series_slug: str) -> List[Dict]:
@@ -77,13 +86,6 @@ class PolymarketData:
         return None
 
     def get_active_short_term_markets(self, assets: List[str] = None, limit: int = 100) -> List[Dict]:
-        """
-        Discover live 5m/15m Up/Down windows via series endpoints.
-
-        Why not /markets?order=volume24hr:
-        short windows are tiny individual markets and almost never appear
-        in the global top-N volume list, so the old filter returned [].
-        """
         if assets is None:
             assets = ["btc", "eth"]
 
@@ -95,17 +97,12 @@ class PolymarketData:
             asset = asset.lower()
             for series_slug in SERIES_BY_ASSET.get(asset, []):
                 events = self._series_events(series_slug)
-                # Prefer events ending soon (live / next windows)
-                ranked = []
-                for e in events:
-                    if not isinstance(e, dict):
-                        continue
-                    if e.get("closed"):
-                        continue
-                    end = e.get("endDate") or ""
-                    ranked.append(e)
-                # Keep a modest number per series
-                for e in ranked[:12]:
+                # Sort soonest-ending first so live windows beat far-future ones
+                events = sorted(
+                    [e for e in events if isinstance(e, dict) and not e.get("closed")],
+                    key=lambda e: _end_ts(e.get("endDate")),
+                )
+                for e in events[:15]:
                     slug = e.get("slug") or e.get("ticker")
                     if not slug or slug in seen:
                         continue
@@ -114,7 +111,14 @@ class PolymarketData:
                         continue
                     if m.get("closed") or not m.get("active", True):
                         continue
-                    if not m.get("acceptingOrders", True) and m.get("enableOrderBook") is False:
+
+                    end_iso = m.get("endDate") or e.get("endDate")
+                    end_t = _end_ts(end_iso)
+                    if end_t < now + 40:
+                        # already ending / ended
+                        continue
+                    if end_t > now + 3600:
+                        # more than 1h out — skip for HF bot
                         continue
 
                     token_ids = m.get("clobTokenIds")
@@ -126,30 +130,20 @@ class PolymarketData:
                     if not isinstance(token_ids, list) or len(token_ids) < 2:
                         continue
 
-                    # Skip already-ended windows if endDate is in the past
-                    end_iso = m.get("endDate") or e.get("endDate")
-                    if end_iso:
-                        try:
-                            # rough parse: if clearly past, skip
-                            from datetime import datetime, timezone
-                            end_dt = datetime.fromisoformat(end_iso.replace("Z", "+00:00"))
-                            if end_dt.timestamp() < now - 30:
-                                continue
-                        except Exception:
-                            pass
-
                     m["_up_token"] = str(token_ids[0])
                     m["_down_token"] = str(token_ids[1])
                     m["_asset"] = asset
                     m["_series"] = series_slug
+                    m["_end_ts"] = end_t
                     if not m.get("slug"):
                         m["slug"] = slug
+                    if end_iso and not m.get("endDate"):
+                        m["endDate"] = end_iso
                     seen.add(slug)
                     results.append(m)
-                    if len(results) >= limit:
-                        logger.info(f"Found {len(results)} active short-term crypto markets")
-                        return results
 
+        results.sort(key=lambda x: x.get("_end_ts", float("inf")))
+        results = results[:limit]
         logger.info(f"Found {len(results)} active short-term crypto markets")
         return results
 
@@ -160,14 +154,24 @@ class PolymarketData:
             data = r.json()
             bids = _parse_book_levels(data.get("bids", []))
             asks = _parse_book_levels(data.get("asks", []))
+            # CLOB often returns bids descending / asks ascending; normalize best first
+            bids = sorted(bids, key=lambda x: x["price"], reverse=True)
+            asks = sorted(asks, key=lambda x: x["price"])
             mid = None
             if bids and asks:
                 mid = (bids[0]["price"] + asks[0]["price"]) / 2
-            return {"bids": bids, "asks": asks, "mid": mid, "raw": data}
+            return {
+                "bids": bids,
+                "asks": asks,
+                "mid": mid,
+                "best_bid": bids[0]["price"] if bids else None,
+                "best_ask": asks[0]["price"] if asks else None,
+                "raw": data,
+            }
         except Exception as e:
             tid = (token_id or "")[:12]
             logger.warning(f"Book fetch failed for {tid}...: {e}")
-            return {"bids": [], "asks": [], "mid": None}
+            return {"bids": [], "asks": [], "mid": None, "best_bid": None, "best_ask": None}
 
     def get_mid_price(self, token_id: str) -> Optional[float]:
         return self.get_order_book(token_id).get("mid")
