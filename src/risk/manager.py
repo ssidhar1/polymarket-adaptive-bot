@@ -4,9 +4,13 @@ Kelly-lite sizing, exploration budget, hard circuit breakers.
 """
 from typing import Optional
 import logging
-from datetime import date
+from datetime import datetime, timezone
 
 logger = logging.getLogger("astf.risk")
+
+
+def _utc_today():
+    return datetime.now(timezone.utc).date()
 
 
 class RiskManager:
@@ -16,25 +20,36 @@ class RiskManager:
         self.bankroll = float(starting_bankroll)
         self.peak_bankroll = float(starting_bankroll)
         self.daily_pnl = 0.0
-        self.current_day = date.today()
+        self.current_day = _utc_today()
         self.paused = False
         self.pause_reason = None
+        self._pause_logged = False
         self.exploration_used_today = 0.0
+
+    def clear_daily_pause(self, reason: str = "manual/restart"):
+        """Clear daily-loss pause only (drawdown pause stays)."""
+        if self.paused and self.pause_reason and "Daily loss" in (self.pause_reason or ""):
+            self.paused = False
+            self.pause_reason = None
+            self.daily_pnl = 0.0
+            self._pause_logged = False
+            logger.info(f"Daily loss pause cleared ({reason})")
 
     def update_bankroll(self, new_value: float):
         self.bankroll = float(new_value)
         if self.bankroll > self.peak_bankroll:
             self.peak_bankroll = self.bankroll
 
-        today = date.today()
+        today = _utc_today()
         if today != self.current_day:
             self.daily_pnl = 0.0
             self.exploration_used_today = 0.0
             self.current_day = today
-            if self.paused and self.pause_reason and "Daily loss" in self.pause_reason:
+            if self.paused and self.pause_reason and "Daily loss" in (self.pause_reason or ""):
                 self.paused = False
                 self.pause_reason = None
-                logger.info("Daily loss pause cleared (new day)")
+                self._pause_logged = False
+                logger.info("Daily loss pause cleared (new UTC day)")
 
         self._check_circuit_breakers()
 
@@ -44,14 +59,27 @@ class RiskManager:
         dd = (self.peak_bankroll - self.bankroll) / self.peak_bankroll
         daily_loss_pct = -self.daily_pnl / self.peak_bankroll if self.daily_pnl < 0 else 0.0
 
-        if dd >= self.config.get("max_drawdown_pct", 0.15):
+        max_dd = self.config.get("max_drawdown_pct", 0.15)
+        daily_lim = self.config.get("daily_loss_limit_pct", 0.08)
+
+        if dd >= max_dd:
             self.paused = True
             self.pause_reason = f"Max drawdown hit: {dd:.1%}"
-            logger.warning(self.pause_reason)
-        elif daily_loss_pct >= self.config.get("daily_loss_limit_pct", 0.08):
+            if not self._pause_logged:
+                logger.warning(
+                    f"{self.pause_reason} | bank=${self.bankroll:.2f} peak=${self.peak_bankroll:.2f}"
+                )
+                self._pause_logged = True
+        elif daily_loss_pct >= daily_lim:
             self.paused = True
             self.pause_reason = f"Daily loss limit hit: {daily_loss_pct:.1%}"
-            logger.warning(self.pause_reason)
+            if not self._pause_logged:
+                logger.warning(
+                    f"{self.pause_reason} | daily_pnl=${self.daily_pnl:.2f} "
+                    f"bank=${self.bankroll:.2f} peak=${self.peak_bankroll:.2f} "
+                    f"(clears next UTC day or on service restart)"
+                )
+                self._pause_logged = True
 
     def can_open(self, size_usd: float, open_count: int = 0) -> bool:
         if self.paused:
@@ -79,7 +107,6 @@ class RiskManager:
             remaining = max(0.0, self.bankroll * explor_pct - self.exploration_used_today)
             return min(base * 0.35, remaining)
 
-        # Never force size on negative / missing edge
         if edge_after_fees is not None and edge_after_fees <= 0:
             return 0.0
         if est_prob is not None and 0.01 < price < 0.99:
@@ -88,11 +115,9 @@ class RiskManager:
                 edge = edge_after_fees
             if edge <= 0:
                 return 0.0
-            # quarter-Kelly on binary: f* = edge / (1 - price) roughly for payoff 1
             kelly = edge / max(1e-6, (1.0 - price))
             kelly = max(0.0, min(kelly * 0.2, max_pct))
             size = self.bankroll * kelly
-            # scale up a bit with confidence, but never below 0 when edge is weak
             conf_scale = max(0.5, min(1.0, (confidence - 0.5) / 0.35))
             size *= conf_scale
             return max(0.0, min(base, size))
