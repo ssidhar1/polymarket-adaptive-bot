@@ -15,7 +15,7 @@ from src.utils.logging import setup_logging
 from src.utils.persistence import TradeLogger
 from src.utils.state import StateStore
 from src.data.polymarket_client import PolymarketData
-from src.data.features import build_features
+from src.data.features import build_features, best_ask
 from src.data.price_feed import PriceFeed
 from src.data.resolution import ResolutionChecker
 from src.signals.ensemble import EnsembleSignal
@@ -69,16 +69,18 @@ def run_paper(config: dict):
     trade_log = TradeLogger()
 
     assets = config.get("markets", {}).get("targets", ["btc", "eth"])
-    cycle = int(config.get("execution", {}).get("cycle_seconds", 12))
+    cycle = int(config.get("execution", {}).get("cycle_seconds", 10))
     price_history = defaultdict(lambda: deque(maxlen=20))
     score_map = {}
     cooldown_until = {}
-    cooldown_sec = int(config.get("execution", {}).get("cooldown_seconds", 90))
+    cooldown_sec = int(config.get("execution", {}).get("cooldown_seconds", 60))
+    max_per_cycle = int(config.get("execution", {}).get("max_markets_per_cycle", 12))
     cycles_since_save = 0
 
     logger.info(
         f"Bankroll ${risk.bankroll:.2f} | assets={assets} | "
-        f"min_score={learner.get_min_score():.3f} | regime={learner.get_regime()}"
+        f"min_score={learner.get_min_score():.3f} | regime={learner.get_regime()} | "
+        f"degen={config.get('signals', {}).get('degen_mode', True)}"
     )
 
     while not _shutdown:
@@ -95,6 +97,7 @@ def run_paper(config: dict):
 
             ensemble.min_score = learner.get_min_score()
 
+            # --- resolve open positions ---
             for pos in list(tracker.get_open_list()):
                 closed, up_p, down_p = resolver.check(
                     slug=pos.slug or None, market_id=pos.market_id or None
@@ -138,6 +141,7 @@ def run_paper(config: dict):
 
             markets = data.get_active_short_term_markets(assets=assets)
             open_n = tracker.open_count()
+            trades_this_cycle = 0
 
             if not markets:
                 summary = tracker.summary()
@@ -147,7 +151,7 @@ def run_paper(config: dict):
                     f"today {daily['trades']}t ${daily['pnl']:.2f} | bank=${risk.bankroll:.2f}"
                 )
             else:
-                for m in markets[:8]:
+                for m in markets[:max_per_cycle]:
                     up_token = m.get("_up_token")
                     down_token = m.get("_down_token")
                     asset = m.get("_asset", "btc")
@@ -167,67 +171,85 @@ def run_paper(config: dict):
                     book_down = data.get_order_book(down_token)
                     up_mid = book_up.get("mid")
                     down_mid = book_down.get("mid")
+                    up_ask = book_up.get("best_ask") or best_ask(book_up)
+                    down_ask = book_down.get("best_ask") or best_ask(book_down)
 
                     hist = list(price_history.get(asset, []))
                     mtf = prices.multi_timeframe_momentum(asset)
                     mom = prices.momentum(asset, hist)
 
-                    features = build_features(m, book_up, external_momentum=mom)
-                    sig = ensemble.evaluate(features, up_mid=up_mid, down_mid=down_mid)
+                    # Score both sides with the correct book; pick the stronger pass
+                    feat_up = build_features(m, book_up, external_momentum=mom, side="up")
+                    feat_dn = build_features(m, book_down, external_momentum=mom, side="down")
 
-                    if sig.get("type") == "complete_set":
-                        size = risk.size_position(sig["score"], is_exploration=False)
-                        if not risk.can_open(size, open_count=open_n):
-                            continue
-                        if not risk.can_open(size, open_count=open_n + 1):
-                            continue
-                        for side, token, price in [
-                            ("up", up_token, sig["up_price"]),
-                            ("down", down_token, sig["down_price"]),
-                        ]:
-                            order = executor.place_order(token, "buy", price, size, mid_id)
-                            tracker.add(
-                                order,
-                                direction=side,
-                                slug=m.get("slug", ""),
-                                end_date=m.get("endDate") or m.get("end_date_iso"),
+                    # Arb check first (uses asks when available)
+                    arb = ensemble.complete_set_arb(
+                        up_mid, down_mid, up_ask=up_ask, down_ask=down_ask
+                    )
+                    if arb:
+                        size = risk.size_position(arb["score"], is_exploration=False)
+                        if risk.can_open(size, open_count=open_n) and risk.can_open(
+                            size, open_count=open_n + 1
+                        ):
+                            for side, token, price in [
+                                ("up", up_token, arb["up_price"]),
+                                ("down", down_token, arb["down_price"]),
+                            ]:
+                                order = executor.place_order(
+                                    token, "buy", price, size, mid_id
+                                )
+                                tracker.add(
+                                    order,
+                                    direction=side,
+                                    slug=m.get("slug", ""),
+                                    end_date=m.get("endDate") or m.get("end_date_iso"),
+                                )
+                                score_map[order["order_id"]] = arb["score"]
+                                open_n += 1
+                            cooldown_until[mid_id] = now + cooldown_sec
+                            trades_this_cycle += 1
+                            logger.info(
+                                f"ARB SET | edge={arb['edge']:.3f} | size=${size:.1f} | "
+                                f"{m.get('slug','')[:40]}"
                             )
-                            score_map[order["order_id"]] = sig["score"]
-                            open_n += 1
-                        cooldown_until[mid_id] = now + cooldown_sec
-                        logger.info(
-                            f"ARB SET | edge={sig['edge']:.3f} | size=${size:.1f} | {m.get('slug','')[:40]}"
-                        )
+                            continue
+
+                    sig_up = ensemble.directional_score(feat_up, preferred_side="up")
+                    sig_dn = ensemble.directional_score(feat_dn, preferred_side="down")
+
+                    candidates = []
+                    if sig_up.get("pass") or (
+                        learner.get_regime() == "favorable"
+                        and sig_up.get("score", 0) > ensemble.min_score - 0.08
+                    ):
+                        candidates.append((sig_up, feat_up, up_token, up_ask or up_mid))
+                    if sig_dn.get("pass") or (
+                        learner.get_regime() == "favorable"
+                        and sig_dn.get("score", 0) > ensemble.min_score - 0.08
+                    ):
+                        candidates.append((sig_dn, feat_dn, down_token, down_ask or down_mid))
+
+                    if not candidates:
                         continue
 
-                    is_expl = False
-                    if not sig.get("pass"):
-                        if (
-                            learner.get_regime() == "favorable"
-                            and sig.get("score", 0) > ensemble.min_score - 0.08
-                        ):
-                            is_expl = True
-                        else:
-                            continue
+                    # Highest score wins
+                    candidates.sort(key=lambda x: x[0].get("score", 0), reverse=True)
+                    sig, feat, token, entry_px = candidates[0]
 
+                    is_expl = not sig.get("pass")
                     direction = sig["direction"]
-                    mid = features.get("mid_price") or 0.5
-                    if direction == "down" and down_mid is not None:
-                        mid = down_mid
-                    elif direction == "up" and up_mid is not None:
-                        mid = up_mid
+                    entry = float(entry_px if entry_px is not None else (feat.get("mid_price") or 0.5))
 
                     size = risk.size_position(
                         confidence=sig["score"],
                         est_prob=sig.get("est_prob"),
-                        price=mid,
+                        price=entry,
                         is_exploration=is_expl,
                     )
                     if size <= 0 or not risk.can_open(size, open_count=open_n):
                         continue
 
-                    token = up_token if direction == "up" else down_token
-                    order = executor.place_order(token, "buy", mid, size, mid_id)
+                    order = executor.place_order(token, "buy", entry, size, mid_id)
                     tracker.add(
                         order,
                         direction=direction,
@@ -236,6 +258,7 @@ def run_paper(config: dict):
                     )
                     score_map[order["order_id"]] = sig["score"]
                     open_n += 1
+                    trades_this_cycle += 1
                     cooldown_until[mid_id] = now + cooldown_sec
                     if is_expl:
                         risk.record_exploration(size)
@@ -243,18 +266,25 @@ def run_paper(config: dict):
                     tag = "EXPL" if is_expl else "DIR"
                     logger.info(
                         f"{tag} {direction.upper()} | score={sig['score']:.3f} | "
-                        f"mid={mid:.3f} | mom={mom:.2f} "
+                        f"entry={entry:.3f} | mom={mom:.2f} "
                         f"(1m={mtf['m1']:.2f} 5m={mtf['m5']:.2f} 15m={mtf['m15']:.2f}) | "
                         f"size=${size:.1f} | {m.get('slug','')[:40]}"
                     )
 
+                rejects = ensemble.pop_reject_summary()
+                reject_str = ""
+                if rejects:
+                    top = sorted(rejects.items(), key=lambda x: -x[1])[:4]
+                    reject_str = " | rej " + ",".join(f"{k}={v}" for k, v in top)
+
                 summary = tracker.summary()
                 daily = trade_log.daily_summary()
                 logger.info(
-                    f"Cycle | mkts={len(markets)} | open={summary['open_count']} | "
-                    f"pnl=${summary['total_pnl']:.2f} | today {daily['trades']}t ${daily['pnl']:.2f} | "
+                    f"Cycle | mkts={len(markets)} | opened={trades_this_cycle} | "
+                    f"open={summary['open_count']} | pnl=${summary['total_pnl']:.2f} | "
+                    f"today {daily['trades']}t ${daily['pnl']:.2f} | "
                     f"regime={learner.get_regime()} | min_score={learner.get_min_score():.3f} | "
-                    f"bank=${risk.bankroll:.2f}"
+                    f"bank=${risk.bankroll:.2f}{reject_str}"
                 )
 
             cycles_since_save += 1
