@@ -1,9 +1,7 @@
 """
 Position tracker + resolution logic for paper (and later live) trades.
-Captures entry timing fields for later hour/weekday edge analysis.
-Supports serialize/restore so restarts don't orphan open paper positions.
 """
-from dataclasses import dataclass, asdict
+from dataclasses import dataclass
 from typing import Dict, List, Optional, Any
 from datetime import datetime, timezone, timedelta
 import logging
@@ -135,18 +133,33 @@ class PositionTracker:
     def open_count(self) -> int:
         return len(self.open)
 
-    def is_stale(self, pos: OpenPosition, grace_seconds: int = 180) -> bool:
+    def stale_stage(
+        self,
+        pos: OpenPosition,
+        grace_seconds: int = 300,
+        max_hold_minutes: int = 35,
+    ) -> str:
+        """
+        none | soft | hard
+        soft: past end+grace → try mark-to-mid before giving up
+        hard: very old → force exit
+        """
         now = datetime.now(timezone.utc)
+        if now - pos.opened_at > timedelta(minutes=max_hold_minutes):
+            return "hard"
         if pos.end_date:
             try:
                 end = datetime.fromisoformat(pos.end_date.replace("Z", "+00:00"))
+                if now > end + timedelta(seconds=grace_seconds * 2):
+                    return "hard"
                 if now > end + timedelta(seconds=grace_seconds):
-                    return True
+                    return "soft"
             except Exception:
                 pass
-        if now - pos.opened_at > timedelta(minutes=25):
-            return True
-        return False
+        return "none"
+
+    def is_stale(self, pos: OpenPosition, grace_seconds: int = 300) -> bool:
+        return self.stale_stage(pos, grace_seconds=grace_seconds) != "none"
 
     def summary(self) -> Dict:
         total_pnl = sum(t["pnl"] for t in self.closed)
@@ -162,7 +175,7 @@ class PositionTracker:
     def export_open(self) -> List[Dict]:
         out = []
         for pos in self.open.values():
-            d = {
+            out.append({
                 "order_id": pos.order_id,
                 "market_id": pos.market_id,
                 "token_id": pos.token_id,
@@ -186,8 +199,7 @@ class PositionTracker:
                 "momentum": pos.momentum,
                 "regime": pos.regime,
                 "trade_type": pos.trade_type,
-            }
-            out.append(d)
+            })
         return out
 
     def import_open(self, rows: List[Dict]):
