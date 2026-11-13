@@ -121,6 +121,14 @@ def run_paper(config: dict):
 
     learner = AdaptiveLearner(config)
     learner.import_state(saved.get("learner") or {})
+    # Soft-reset frozen chaotic threshold from older runs
+    if learner.get_min_score() > 0.70:
+        logger.warning(
+            f"Soft-capping restored min_score {learner.get_min_score():.3f} → 0.65"
+        )
+        learner.current_min_score = 0.65
+        if learner.regime == "chaotic":
+            learner.regime = "normal"
 
     fee_rate = float(config.get("signals", {}).get("fee_rate", 0.01))
     executor = PaperExecutor(fee_rate=fee_rate)
@@ -446,6 +454,9 @@ def run_paper(config: dict):
                     f"bank=${risk.bankroll:.2f}{reject_str}"
                 )
 
+            # Decay min_score if stuck idle under chaotic freeze
+            learner.on_cycle(opened=trades_this_cycle)
+
             cycles_since_save += 1
             cycles_since_timing += 1
             if cycles_since_save >= 5:
@@ -468,7 +479,6 @@ def run_paper(config: dict):
         except Exception as e:
             consecutive_errors += 1
             logger.exception(f"Loop error ({consecutive_errors}): {e}")
-            # Exponential backoff so a bad API outage doesn't spin the CPU
             backoff = min(120, cycle * (2 ** min(consecutive_errors, 4)))
             if not _shutdown:
                 time.sleep(backoff)
