@@ -1,7 +1,6 @@
 """
 Data layer for short-term crypto Up/Down markets on Polymarket.
-Live windows use deterministic slugs:
-  {asset}-updown-{5m|15m}-{unix_aligned_to_window}
+Tries multiple slug patterns so a single rename does not zero markets.
 """
 from typing import List, Dict, Optional, Any, Tuple
 import json
@@ -24,6 +23,13 @@ WINDOWS = [
     ("15m", 900),
 ]
 ASSETS = ("btc", "eth")
+
+# Known Polymarket short-window slug templates (ts = window start unix)
+SLUG_TEMPLATES = [
+    "{asset}-updown-{label}-{ts}",
+    "{asset}-up-or-down-{label}-{ts}",
+    "{asset}-updown-{label}-{ts}z",
+]
 
 
 def _safe_float(x: Any, default: float = 0.0) -> float:
@@ -54,7 +60,7 @@ def _end_ts(iso: Optional[str]) -> float:
 
 def _build_session() -> requests.Session:
     s = requests.Session()
-    s.headers.update({"User-Agent": "astf-bot/0.8"})
+    s.headers.update({"User-Agent": "astf-bot/0.9"})
     retry = Retry(
         total=2,
         backoff_factor=0.3,
@@ -71,7 +77,8 @@ class PolymarketData:
     def __init__(self):
         self.session = _build_session()
         self._lock = threading.Lock()
-        logger.info("PolymarketData initialized (parallel slug discovery + CLOB)")
+        self._working_template: Optional[str] = None
+        logger.info("PolymarketData initialized (multi-slug discovery + CLOB)")
 
     def _get(self, url: str, params: dict = None, timeout: int = 8):
         with self._lock:
@@ -91,19 +98,24 @@ class PolymarketData:
         return None
 
     def _candidate_slugs(self, assets: List[str], now: float) -> List[Tuple[str, str, str, int, int]]:
-        """Current window + next one only (not +2/+3 — those are always too_early)."""
         out = []
         now_i = int(now)
+        templates = (
+            [self._working_template] if self._working_template else list(SLUG_TEMPLATES)
+        )
         for asset in assets:
             asset = asset.lower()
             if asset not in ASSETS:
                 continue
             for label, step in WINDOWS:
                 base = (now_i // step) * step
-                for i in range(0, 2):  # current + next
+                for i in range(0, 2):
                     ts = base + i * step
-                    slug = f"{asset}-updown-{label}-{ts}"
-                    out.append((asset, label, slug, step, ts))
+                    for tmpl in templates:
+                        if not tmpl:
+                            continue
+                        slug = tmpl.format(asset=asset, label=label, ts=ts)
+                        out.append((asset, label, slug, step, ts))
         return out
 
     def _hydrate(self, meta: Tuple[str, str, str, int, int], now: float) -> Optional[Dict]:
@@ -114,20 +126,25 @@ class PolymarketData:
         if m.get("closed") or not m.get("active", True):
             return None
 
+        # Remember which template worked
+        for tmpl in SLUG_TEMPLATES:
+            try:
+                if slug == tmpl.format(asset=asset, label=label, ts=win_start):
+                    self._working_template = tmpl
+                    break
+            except Exception:
+                pass
+
         end_iso = m.get("endDate")
         end_t = _end_ts(end_iso)
         if end_t == float("inf"):
             end_t = float(win_start + step)
 
         remaining = end_t - now
-        # Must still be open with a bit of room
         if remaining < 45:
             return None
-        # Skip pure future windows (not started): remaining >> window length
-        # Allow ~30s early so we can arm near the open
         if remaining > step + 30:
             return None
-        # Sanity: don't trade something days out
         if remaining > 45 * 60:
             return None
 
@@ -179,14 +196,15 @@ class PolymarketData:
                 seen.add(slug)
                 results.append(m)
 
-        # Prefer soonest expiry (most "in progress")
         results.sort(key=lambda x: x.get("_end_ts", float("inf")))
         results = results[:limit]
         logger.info(f"Found {len(results)} active short-term crypto markets")
         if not results:
+            # Reset sticky template so next cycle retries all patterns
+            self._working_template = None
             logger.warning(
-                "Zero markets — check Gamma reachability / slug pattern "
-                "(btc-updown-5m-{unix})"
+                "Zero markets — tried slug patterns %s; check Gamma / naming",
+                SLUG_TEMPLATES,
             )
         return results
 
