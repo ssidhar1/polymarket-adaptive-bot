@@ -85,6 +85,7 @@ class EnsembleSignal:
         spread = float(features.get("spread", 0.02) or 0.02)
         depth = float(features.get("depth_usd", 0.0) or 0.0)
         window_s = int(features.get("window_seconds", 900) or 900)
+        feat_side = str(features.get("side") or "").lower()
 
         if depth < self.min_depth_usd:
             return self._reject("thin_book")
@@ -106,11 +107,15 @@ class EnsembleSignal:
         else:
             direction = "up" if (mom + 0.7 * imb) >= 0 else "down"
 
-        # Features already side-aligned when preferred_side + cross-book used
+        # Momentum is always market-level (positive = BTC/ETH up)
         signed_mom = mom if direction == "up" else -mom
-        signed_imb = imb if direction == "up" else -imb
-        # If features were built with side=direction already, imb is aligned;
-        # double-flip is avoided when caller passes preferred_side matching side
+
+        # Imbalance: if features were built for this side (cross-book already
+        # aligned so positive = favor this side), do NOT flip again.
+        if feat_side in ("up", "down") and feat_side == direction:
+            signed_imb = imb
+        else:
+            signed_imb = imb if direction == "up" else -imb
 
         if abs(signed_mom) < self.min_abs_momentum and abs(signed_imb) < 0.12:
             return self._reject("weak_signal")
@@ -143,16 +148,13 @@ class EnsembleSignal:
 
         score = float(np.clip(0.5 + raw * 0.55, 0.0, 1.0))
 
-        # Honest lift: require agreement between mom and imb for full lift
         mom_s = max(0.0, signed_mom)
         imb_s = max(0.0, signed_imb)
         agree = 1.0 if (signed_mom > 0 and signed_imb > 0) else 0.55
         signal_strength = float(np.clip(0.55 * mom_s + 0.45 * imb_s, 0.0, 1.0)) * agree
-        # Cheap shares get slightly more room (still capped)
         cheap_boost = 1.0 + 0.15 * cheap_term
         max_lift = self.max_prob_lift * (1.15 if self.degen else 1.0)
-        lift = signal_strength * max_lift * cheap_boost
-        lift = min(lift, max_lift)
+        lift = min(signal_strength * max_lift * cheap_boost, max_lift)
         est_prob = float(np.clip(entry + lift, 0.05, 0.95))
 
         edge_after_fees = est_prob - entry - self.fee_rate
