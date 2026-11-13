@@ -16,10 +16,11 @@ class EnsembleSignal:
         self.min_score = sig.get("min_score", 0.55)
         self.min_edge = risk.get("min_edge_after_fees", 0.02)
         self.fee_rate = float(sig.get("fee_rate", 0.01))
-        self.fee_buffer = self.fee_rate * 2  # both legs for complete-set
+        self.fee_buffer = self.fee_rate * 2
         self.min_depth_usd = sig.get("min_depth_usd", 25.0)
         self.min_time_remaining = sig.get("min_time_remaining_pct", 0.10)
-        self.max_time_remaining = sig.get("max_time_remaining_pct", 0.92)
+        # Optional soft preference — no longer a hard block at 0.90
+        self.max_time_remaining = sig.get("max_time_remaining_pct", 0.98)
         self.max_entry = float(sig.get("max_entry_price", 0.58))
         self.min_abs_momentum = float(sig.get("min_abs_momentum", 0.12))
         self.degen = bool(sig.get("degen_mode", True))
@@ -88,11 +89,12 @@ class EnsembleSignal:
         if depth < self.min_depth_usd:
             return self._reject("thin_book")
 
+        # Not started yet: remaining longer than the window length
+        if remaining_s > window_s + 15:
+            return self._reject("too_early")
+
         if time_left < self.min_time_remaining or remaining_s < 60:
             return self._reject("near_expiry")
-
-        if time_left > self.max_time_remaining:
-            return self._reject("too_early")
 
         if entry < 0.05 or entry > 0.95:
             return self._reject("extreme_mid")
@@ -139,9 +141,6 @@ class EnsembleSignal:
 
         score = float(np.clip(0.5 + raw * 0.55, 0.0, 1.0))
 
-        # Honest est_prob: market price is the baseline; only claim lift from
-        # *positive* signed signal strength — no fixed +0.03 pad.
-        # strength in [0, 1] from signed_mom/imb; max lift capped small.
         signal_strength = max(0.0, 0.6 * signed_mom + 0.4 * signed_imb)
         signal_strength = float(np.clip(signal_strength, 0.0, 1.0))
         max_lift = 0.08 if self.degen else 0.06
