@@ -40,13 +40,6 @@ def detect_window_seconds(slug: Optional[str], question: Optional[str] = None) -
 
 
 def compute_time_features(end_date_iso: Optional[str], window_seconds: int = 900) -> Dict[str, float]:
-    """
-    remaining_s: actual seconds until end (can be > window if not started).
-    time_remaining_pct: fraction of *this* window still left, in [0, 1].
-      - before start → 1.0 (and remaining_s > window_s)
-      - mid window → ~0.5
-      - near end → ~0
-    """
     if not end_date_iso:
         return {"time_remaining_s": float(window_seconds) * 0.5, "time_remaining_pct": 0.5}
     try:
@@ -55,7 +48,6 @@ def compute_time_features(end_date_iso: Optional[str], window_seconds: int = 900
         remaining = (end - now).total_seconds()
         if remaining <= 0:
             return {"time_remaining_s": 0.0, "time_remaining_pct": 0.0}
-        # Progress within the nominal window length
         pct = min(1.0, remaining / max(window_seconds, 1))
         return {"time_remaining_s": float(remaining), "time_remaining_pct": float(pct)}
     except Exception:
@@ -94,11 +86,35 @@ def best_bid(book: Dict) -> Optional[float]:
     return _level_price(bids[0]) or book.get("mid")
 
 
+def cross_book_imbalance(book_up: Dict, book_down: Dict) -> float:
+    """
+    Positive → market leaning UP (more bid pressure on up / ask pressure on down).
+    Uses relative mid skew when both mids exist, blended with single-side imbalances.
+    """
+    up_mid = book_up.get("mid")
+    dn_mid = book_down.get("mid")
+    skew = 0.0
+    if up_mid is not None and dn_mid is not None:
+        try:
+            u, d = float(up_mid), float(dn_mid)
+            # If up is expensive relative to down, market prices UP higher
+            skew = max(-1.0, min(1.0, (u - d) * 2.0))
+        except (TypeError, ValueError):
+            skew = 0.0
+
+    imb_up = compute_book_imbalance(book_up.get("bids") or [], book_up.get("asks") or [])
+    imb_dn = compute_book_imbalance(book_down.get("bids") or [], book_down.get("asks") or [])
+    # Bid-heavy up book and ask-heavy down book both support UP
+    side = 0.5 * imb_up - 0.5 * imb_dn
+    return max(-1.0, min(1.0, 0.55 * skew + 0.45 * side))
+
+
 def build_features(
     market: Dict,
     book: Dict,
     external_momentum: float = 0.0,
     side: str = "up",
+    book_other: Optional[Dict] = None,
 ) -> Dict:
     bids = book.get("bids", []) or []
     asks = book.get("asks", []) or []
@@ -112,11 +128,20 @@ def build_features(
 
     slug = market.get("slug") or market.get("market_slug") or ""
     question = market.get("question") or ""
-    window_s = detect_window_seconds(slug, question)
+    window_s = int(market.get("_window_seconds") or detect_window_seconds(slug, question))
     end_iso = market.get("endDate") or market.get("end_date_iso")
     tfeat = compute_time_features(end_iso, window_s)
 
-    imbalance = compute_book_imbalance(bids, asks)
+    # Prefer true cross-book signal when both books available
+    if book_other is not None:
+        if side == "up":
+            imbalance = cross_book_imbalance(book, book_other)
+        else:
+            imbalance = -cross_book_imbalance(book_other, book)
+    else:
+        imbalance = compute_book_imbalance(bids, asks)
+        # Single-book imbalance is already side-local; no extra flip here
+
     depth = compute_depth_usd(bids, asks)
 
     spread = 0.0
