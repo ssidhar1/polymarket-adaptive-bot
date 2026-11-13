@@ -39,18 +39,27 @@ def detect_window_seconds(slug: Optional[str], question: Optional[str] = None) -
     return 15 * 60
 
 
-def compute_time_remaining_pct(end_date_iso: Optional[str], window_seconds: int = 900) -> float:
+def compute_time_features(end_date_iso: Optional[str], window_seconds: int = 900) -> Dict[str, float]:
+    """
+    remaining_s: actual seconds until end (can be > window if not started).
+    time_remaining_pct: fraction of *this* window still left, in [0, 1].
+      - before start → 1.0 (and remaining_s > window_s)
+      - mid window → ~0.5
+      - near end → ~0
+    """
     if not end_date_iso:
-        return 0.5
+        return {"time_remaining_s": float(window_seconds) * 0.5, "time_remaining_pct": 0.5}
     try:
         end = datetime.fromisoformat(end_date_iso.replace("Z", "+00:00"))
         now = datetime.now(timezone.utc)
         remaining = (end - now).total_seconds()
         if remaining <= 0:
-            return 0.0
-        return min(1.0, remaining / max(window_seconds, 1))
+            return {"time_remaining_s": 0.0, "time_remaining_pct": 0.0}
+        # Progress within the nominal window length
+        pct = min(1.0, remaining / max(window_seconds, 1))
+        return {"time_remaining_s": float(remaining), "time_remaining_pct": float(pct)}
     except Exception:
-        return 0.5
+        return {"time_remaining_s": float(window_seconds) * 0.5, "time_remaining_pct": 0.5}
 
 
 def compute_book_imbalance(bids: list, asks: list, levels: int = 5) -> float:
@@ -91,10 +100,6 @@ def build_features(
     external_momentum: float = 0.0,
     side: str = "up",
 ) -> Dict:
-    """
-    Build features from the book of the side we care about.
-    For DOWN tokens, pass the down book so imbalance/depth match the trade.
-    """
     bids = book.get("bids", []) or []
     asks = book.get("asks", []) or []
 
@@ -109,8 +114,7 @@ def build_features(
     question = market.get("question") or ""
     window_s = detect_window_seconds(slug, question)
     end_iso = market.get("endDate") or market.get("end_date_iso")
-    time_pct = compute_time_remaining_pct(end_iso, window_s)
-    remaining_s = time_pct * window_s
+    tfeat = compute_time_features(end_iso, window_s)
 
     imbalance = compute_book_imbalance(bids, asks)
     depth = compute_depth_usd(bids, asks)
@@ -130,8 +134,8 @@ def build_features(
         "momentum": external_momentum,
         "book_imbalance": imbalance,
         "volatility_regime": vol_regime,
-        "time_remaining_pct": time_pct,
-        "time_remaining_s": remaining_s,
+        "time_remaining_pct": tfeat["time_remaining_pct"],
+        "time_remaining_s": tfeat["time_remaining_s"],
         "mid_price": mid,
         "ask_price": ask,
         "bid_price": bid,
