@@ -4,17 +4,28 @@ Paper trading engine - simulates fills with realistic fees and slippage.
 from typing import Dict, Optional
 from datetime import datetime, timezone
 import logging
+import math
 import uuid
 
 logger = logging.getLogger("astf.execution.paper")
 
+MIN_NOTIONAL = 0.50  # ignore dust
+
+
+def _finite(x: float, default: float = 0.0) -> float:
+    try:
+        v = float(x)
+        if math.isnan(v) or math.isinf(v):
+            return default
+        return v
+    except (TypeError, ValueError):
+        return default
+
 
 class PaperExecutor:
     def __init__(self, fee_rate: float = 0.01, extra_slippage: float = 0.0):
-        # ~1% all-in taker-ish cost is closer to many Polymarket short markets
-        # than the old flat 2% which was a silent edge killer.
-        self.fee_rate = fee_rate
-        self.extra_slippage = extra_slippage
+        self.fee_rate = max(0.0, min(0.1, float(fee_rate)))
+        self.extra_slippage = max(0.0, float(extra_slippage or 0.0))
         self.open_orders = {}
         self.closed_trades = []
 
@@ -26,26 +37,43 @@ class PaperExecutor:
         size_usd: float,
         market_id: str,
         already_aggressive: bool = True,
-    ) -> Dict:
+    ) -> Optional[Dict]:
         """
         already_aggressive=True when caller passed best ask/bid already.
-        Avoid stacking another 20bps of phantom slippage on top.
+        Returns None if inputs are invalid (caller must skip).
         """
-        order_id = str(uuid.uuid4())[:8]
-        px = float(price)
+        if not token_id or not market_id:
+            logger.warning("PAPER SKIP | missing token_id or market_id")
+            return None
+
+        side = (side or "buy").lower()
+        if side not in ("buy", "sell"):
+            logger.warning(f"PAPER SKIP | bad side={side}")
+            return None
+
+        px = _finite(price, 0.0)
+        cost = _finite(size_usd, 0.0)
+        if px <= 0 or cost < MIN_NOTIONAL:
+            logger.warning(f"PAPER SKIP | price={px} size={cost}")
+            return None
+
         if not already_aggressive:
             slip = self.extra_slippage if self.extra_slippage else 0.002
             px = px + slip if side == "buy" else px - slip
         fill_price = max(0.01, min(0.99, px))
 
-        cost = float(size_usd)
         shares = cost / fill_price if fill_price > 0 else 0.0
+        if shares <= 0 or not math.isfinite(shares):
+            logger.warning("PAPER SKIP | non-finite shares")
+            return None
+
         fee = cost * self.fee_rate
+        order_id = str(uuid.uuid4())[:8]
 
         order = {
             "order_id": order_id,
-            "token_id": token_id,
-            "market_id": market_id,
+            "token_id": str(token_id),
+            "market_id": str(market_id),
             "side": side,
             "requested_price": float(price),
             "fill_price": fill_price,
@@ -65,13 +93,19 @@ class PaperExecutor:
         if order_id not in self.open_orders:
             return None
         order = self.open_orders.pop(order_id)
-        pnl = (resolution_price - order["fill_price"]) * order["shares"] - order["fee"]
+        res = _finite(resolution_price, 0.5)
+        res = max(0.0, min(1.0, res))
+        pnl = (res - order["fill_price"]) * order["shares"] - order["fee"]
+        if not math.isfinite(pnl):
+            pnl = -order["fee"]
         trade = {
             **order,
-            "resolution": resolution_price,
+            "resolution": res,
             "pnl": pnl,
             "closed_at": datetime.now(timezone.utc).isoformat(),
         }
         self.closed_trades.append(trade)
+        if len(self.closed_trades) > 500:
+            self.closed_trades = self.closed_trades[-500:]
         logger.info(f"PAPER RESOLVE | pnl=${pnl:.3f}")
         return trade
