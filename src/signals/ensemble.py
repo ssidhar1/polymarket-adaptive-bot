@@ -17,12 +17,12 @@ class EnsembleSignal:
         self.min_edge = risk.get("min_edge_after_fees", 0.02)
         self.fee_rate = float(sig.get("fee_rate", 0.01))
         self.fee_buffer = self.fee_rate * 2
-        self.min_depth_usd = sig.get("min_depth_usd", 25.0)
+        self.min_depth_usd = sig.get("min_depth_usd", 20.0)
         self.min_time_remaining = sig.get("min_time_remaining_pct", 0.10)
-        # Optional soft preference — no longer a hard block at 0.90
         self.max_time_remaining = sig.get("max_time_remaining_pct", 0.98)
         self.max_entry = float(sig.get("max_entry_price", 0.58))
-        self.min_abs_momentum = float(sig.get("min_abs_momentum", 0.12))
+        self.min_abs_momentum = float(sig.get("min_abs_momentum", 0.10))
+        self.max_prob_lift = float(sig.get("max_prob_lift", 0.10))
         self.degen = bool(sig.get("degen_mode", True))
         self.reject_counts: Dict[str, int] = {}
 
@@ -89,7 +89,6 @@ class EnsembleSignal:
         if depth < self.min_depth_usd:
             return self._reject("thin_book")
 
-        # Not started yet: remaining longer than the window length
         if remaining_s > window_s + 15:
             return self._reject("too_early")
 
@@ -107,14 +106,17 @@ class EnsembleSignal:
         else:
             direction = "up" if (mom + 0.7 * imb) >= 0 else "down"
 
+        # Features already side-aligned when preferred_side + cross-book used
         signed_mom = mom if direction == "up" else -mom
         signed_imb = imb if direction == "up" else -imb
+        # If features were built with side=direction already, imb is aligned;
+        # double-flip is avoided when caller passes preferred_side matching side
 
-        if abs(signed_mom) < self.min_abs_momentum and abs(signed_imb) < 0.15:
+        if abs(signed_mom) < self.min_abs_momentum and abs(signed_imb) < 0.12:
             return self._reject("weak_signal")
 
-        short_w = 0.52 if window_s <= 360 else 0.40
-        imb_w = 0.26 if window_s <= 360 else 0.30
+        short_w = 0.50 if window_s <= 360 else 0.38
+        imb_w = 0.28 if window_s <= 360 else 0.32
 
         time_term = 1.0 - abs(time_left - 0.40)
         cheap_term = max(0.0, (0.55 - entry) / 0.55)
@@ -141,10 +143,16 @@ class EnsembleSignal:
 
         score = float(np.clip(0.5 + raw * 0.55, 0.0, 1.0))
 
-        signal_strength = max(0.0, 0.6 * signed_mom + 0.4 * signed_imb)
-        signal_strength = float(np.clip(signal_strength, 0.0, 1.0))
-        max_lift = 0.08 if self.degen else 0.06
-        lift = signal_strength * max_lift
+        # Honest lift: require agreement between mom and imb for full lift
+        mom_s = max(0.0, signed_mom)
+        imb_s = max(0.0, signed_imb)
+        agree = 1.0 if (signed_mom > 0 and signed_imb > 0) else 0.55
+        signal_strength = float(np.clip(0.55 * mom_s + 0.45 * imb_s, 0.0, 1.0)) * agree
+        # Cheap shares get slightly more room (still capped)
+        cheap_boost = 1.0 + 0.15 * cheap_term
+        max_lift = self.max_prob_lift * (1.15 if self.degen else 1.0)
+        lift = signal_strength * max_lift * cheap_boost
+        lift = min(lift, max_lift)
         est_prob = float(np.clip(entry + lift, 0.05, 0.95))
 
         edge_after_fees = est_prob - entry - self.fee_rate
