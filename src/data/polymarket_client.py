@@ -54,7 +54,7 @@ def _end_ts(iso: Optional[str]) -> float:
 
 def _build_session() -> requests.Session:
     s = requests.Session()
-    s.headers.update({"User-Agent": "astf-bot/0.7"})
+    s.headers.update({"User-Agent": "astf-bot/0.8"})
     retry = Retry(
         total=2,
         backoff_factor=0.3,
@@ -91,6 +91,7 @@ class PolymarketData:
         return None
 
     def _candidate_slugs(self, assets: List[str], now: float) -> List[Tuple[str, str, str, int, int]]:
+        """Current window + next one only (not +2/+3 — those are always too_early)."""
         out = []
         now_i = int(now)
         for asset in assets:
@@ -99,7 +100,7 @@ class PolymarketData:
                 continue
             for label, step in WINDOWS:
                 base = (now_i // step) * step
-                for i in range(0, 4):
+                for i in range(0, 2):  # current + next
                     ts = base + i * step
                     slug = f"{asset}-updown-{label}-{ts}"
                     out.append((asset, label, slug, step, ts))
@@ -118,9 +119,16 @@ class PolymarketData:
         if end_t == float("inf"):
             end_t = float(win_start + step)
 
-        if end_t < now + 45:
+        remaining = end_t - now
+        # Must still be open with a bit of room
+        if remaining < 45:
             return None
-        if end_t > now + 45 * 60:
+        # Skip pure future windows (not started): remaining >> window length
+        # Allow ~30s early so we can arm near the open
+        if remaining > step + 30:
+            return None
+        # Sanity: don't trade something days out
+        if remaining > 45 * 60:
             return None
 
         token_ids = m.get("clobTokenIds")
@@ -138,6 +146,8 @@ class PolymarketData:
         m["_series"] = f"{asset}-up-or-down-{label}"
         m["_end_ts"] = end_t
         m["_window"] = label
+        m["_window_seconds"] = step
+        m["_remaining_s"] = remaining
         if not m.get("slug"):
             m["slug"] = slug
         if not m.get("endDate"):
@@ -169,6 +179,7 @@ class PolymarketData:
                 seen.add(slug)
                 results.append(m)
 
+        # Prefer soonest expiry (most "in progress")
         results.sort(key=lambda x: x.get("_end_ts", float("inf")))
         results = results[:limit]
         logger.info(f"Found {len(results)} active short-term crypto markets")
