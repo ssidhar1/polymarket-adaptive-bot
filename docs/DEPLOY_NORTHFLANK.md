@@ -24,11 +24,23 @@ Northflank Sandbox includes always-on compute (no sleeping) with limited free re
 8. Environment variables (optional):
    - `LOG_LEVEL=INFO`
    - `DEFAULT_MODE=paper`
+   - `ASTF_DATA_DIR=/app/data` (default in image)
+   - `PAPER_RESET_BANKROLL=true` once if you want a clean $1000 paper start
 9. Deploy and open **Logs** — you should see `ASTF PAPER MODE` and cycle lines
 
-## Persistence tip
-Ephemeral disks lose `trades.db` / `runtime_state.json` on redeploy.
-For longer paper runs, attach a small **persistent volume** mounted at `/app/data` and later point the bot paths there (optional improvement).
+## Persistent volume (strongly recommended)
+
+Without a volume, every redeploy/restart can wipe:
+- `runtime_state.json` (bankroll, learner, open positions)
+- `trades.db` (history + timing stats)
+
+**Setup:**
+1. Northflank → service → **Volumes** (or Storage)
+2. Create a small volume (1 GB is plenty)
+3. Mount path: **`/app/data`**
+4. Redeploy
+
+The bot writes state under `ASTF_DATA_DIR` (default `/app/data`).
 
 ## Security
 - Do **not** put a wallet private key in env until you intentionally unlock live mode after paper edge is proven.
@@ -39,5 +51,7 @@ For longer paper runs, attach a small **persistent volume** mounted at `/app/dat
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 cp config.example.yaml config.yaml
+mkdir -p data
+export ASTF_DATA_DIR=./data
 python -m src.main --mode paper
 ```
