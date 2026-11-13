@@ -20,11 +20,15 @@ signals:
   degen_mode: true
   fee_rate: 0.01
   max_entry_price: 0.58
-  min_abs_momentum: 0.12
+  min_abs_momentum: 0.10
   lookback_minutes: 30
-  min_depth_usd: 25.0
-  min_time_remaining_pct: 0.12
-  max_time_remaining_pct: 0.90
+  min_depth_usd: 20.0
+  # Only reject near expiry; "too_early" is remaining_s > window_s
+  min_time_remaining_pct: 0.10
+  # Soft preference only (not a hard gate in ensemble)
+  max_time_remaining_pct: 0.98
+  # Max lift claimed above market price from signal (honest est_prob)
+  max_prob_lift: 0.10
 
 learning:
   calibration_window: 150
@@ -37,3 +41,6 @@ execution:
   cycle_seconds: 10
   cooldown_seconds: 60
   max_markets_per_cycle: 12
+  # Stale: wait this long past endDate before mark-to-mid / force exit
+  stale_grace_seconds: 300
+  stale_max_hold_minutes: 35
