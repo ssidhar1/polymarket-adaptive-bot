@@ -159,6 +159,12 @@ def run_paper(config: dict):
     cycles_since_timing = 0
     last_pause_log = 0.0
     consecutive_errors = 0
+    session_start_bank = float(risk.bankroll)
+    session_start_ts = time.time()
+    session_resolves = 0
+    session_wins = 0
+    session_pnl = 0.0
+    cycles_since_proof = 0
 
     logger.info(
         f"Bankroll ${risk.bankroll:.2f} | peak=${risk.peak_bankroll:.2f} | "
@@ -216,6 +222,10 @@ def run_paper(config: dict):
                                     "stale": False,
                                 })
                                 trade_log.log(trade, score=trade.get("score", 0))
+                                session_resolves += 1
+                                session_pnl += float(trade["pnl"])
+                                if float(trade["pnl"]) > 0:
+                                    session_wins += 1
                                 logger.info(
                                     f"RESOLVED {pos.direction.upper()} → {final:.0f} | "
                                     f"pnl=${trade['pnl']:.3f} | "
@@ -250,6 +260,10 @@ def run_paper(config: dict):
                                 "stale": True,
                             })
                             trade_log.log(trade, score=trade.get("score", 0))
+                            session_resolves += 1
+                            session_pnl += float(trade["pnl"])
+                            if float(trade["pnl"]) > 0:
+                                session_wins += 1
                             logger.warning(
                                 f"STALE SOFT {pos.direction} @ {tag} | pnl=${trade['pnl']:.3f} | "
                                 f"h={trade.get('hour_utc')} win={trade.get('window')}"
@@ -266,6 +280,10 @@ def run_paper(config: dict):
                                 "stale": True,
                             })
                             trade_log.log(trade, score=trade.get("score", 0))
+                            session_resolves += 1
+                            session_pnl += float(trade["pnl"])
+                            if float(trade["pnl"]) > 0:
+                                session_wins += 1
                             logger.warning(
                                 f"STALE HARD {pos.direction} @ 0.5 | pnl=${trade['pnl']:.3f} | "
                                 f"h={trade.get('hour_utc')} win={trade.get('window')}"
@@ -498,6 +516,20 @@ def run_paper(config: dict):
 
             learner.on_cycle(opened=trades_this_cycle)
 
+            cycles_since_proof += 1
+            if cycles_since_proof >= 30:
+                cycles_since_proof = 0
+                uptime_h = (time.time() - session_start_ts) / 3600.0
+                wr = (session_wins / session_resolves) if session_resolves else 0.0
+                delta = risk.bankroll - session_start_bank
+                logger.info(
+                    f"PROOF | session_pnl=${session_pnl:.2f} | bank_delta=${delta:.2f} | "
+                    f"bank=${risk.bankroll:.2f} start=${session_start_bank:.2f} | "
+                    f"resolves={session_resolves} wins={session_wins} wr={wr:.1%} | "
+                    f"uptime_h={uptime_h:.2f} | regime={learner.get_regime()} "
+                    f"min_score={learner.get_min_score():.3f}"
+                )
+
             cycles_since_save += 1
             cycles_since_timing += 1
             if cycles_since_save >= 5:
@@ -529,6 +561,12 @@ def run_paper(config: dict):
             time.sleep(cycle)
 
     _save_state(state, risk, learner, tracker)
+    wr = (session_wins / session_resolves) if session_resolves else 0.0
+    delta = risk.bankroll - session_start_bank
+    logger.info(
+        f"PROOF FINAL | session_pnl=${session_pnl:.2f} | bank_delta=${delta:.2f} | "
+        f"bank=${risk.bankroll:.2f} | resolves={session_resolves} wr={wr:.1%}"
+    )
     logger.info("Shutdown complete. State saved.")
 
 
