@@ -1,8 +1,8 @@
 bankroll: 1000.0
 
 risk:
-  max_position_pct: 0.05
-  max_concurrent: 5
+  max_position_pct: 0.04
+  max_concurrent: 4
   daily_loss_limit_pct: 0.08
   max_drawdown_pct: 0.15
   min_edge_after_fees: 0.02
@@ -16,24 +16,23 @@ markets:
     - "15m"
 
 signals:
-  min_score: 0.55
+  min_score: 0.56
   degen_mode: true
   fee_rate: 0.01
-  max_entry_price: 0.58
-  min_abs_momentum: 0.10
+  # 5m/15m resolve ~50/50 — only buy relatively cheap shares
+  max_entry_price: 0.55
+  min_abs_momentum: 0.12
   lookback_minutes: 30
   min_depth_usd: 20.0
-  # Only reject near expiry; "too_early" is remaining_s > window_s
   min_time_remaining_pct: 0.10
-  # Soft preference only (not a hard gate in ensemble)
   max_time_remaining_pct: 0.98
-  # Max lift claimed above market price from signal (honest est_prob)
   max_prob_lift: 0.10
 
 learning:
   calibration_window: 150
   regime_lookback: 40
-  exploration_pct: 0.06
+  # Keep exploration small; most random 5m bets lose after fees
+  exploration_pct: 0.03
 
 execution:
   prefer_maker: true
@@ -41,6 +40,5 @@ execution:
   cycle_seconds: 10
   cooldown_seconds: 60
   max_markets_per_cycle: 12
-  # Stale: wait this long past endDate before mark-to-mid / force exit
   stale_grace_seconds: 300
   stale_max_hold_minutes: 35
