@@ -138,7 +138,7 @@ def run_paper(config: dict):
         if learner.regime == "chaotic":
             learner.regime = "normal"
 
-    fee_rate = float(config.get("signals", {}).get("fee_rate", 0.01))
+    fee_rate = float(config.get("signals", {}).get("fee_rate", 0.07))
     executor = PaperExecutor(fee_rate=fee_rate)
     tracker = PositionTracker()
     if saved.get("open_positions") and not os.getenv("PAPER_RESET_BANKROLL"):
@@ -153,6 +153,7 @@ def run_paper(config: dict):
     cycle = max(5, int(config.get("execution", {}).get("cycle_seconds", 10) or 10))
     price_history = defaultdict(lambda: deque(maxlen=20))
     cooldown_until = {}
+    window_open_px = {}
     cooldown_sec = max(15, int(config.get("execution", {}).get("cooldown_seconds", 60) or 60))
     max_per_cycle = max(1, int(config.get("execution", {}).get("max_markets_per_cycle", 12) or 12))
     cycles_since_save = 0
@@ -170,7 +171,7 @@ def run_paper(config: dict):
         f"Bankroll ${risk.bankroll:.2f} | peak=${risk.peak_bankroll:.2f} | "
         f"open_restored={tracker.open_count()} | assets={assets} | "
         f"min_score={learner.get_min_score():.3f} | regime={learner.get_regime()} | "
-        f"degen={config.get('signals', {}).get('degen_mode', True)} | fee={fee_rate:.1%}"
+        f"degen={config.get('signals', {}).get('degen_mode', True)} | fee_sched~{fee_rate:.2f}"
     )
 
     while not _shutdown:
@@ -190,6 +191,9 @@ def run_paper(config: dict):
 
             now = time.time()
             _prune_cooldowns(cooldown_until, now)
+            if len(window_open_px) > 64:
+                for k in list(window_open_px.keys())[: len(window_open_px) // 2]:
+                    del window_open_px[k]
 
             try:
                 px = prices.get_prices()
@@ -345,11 +349,29 @@ def run_paper(config: dict):
                         mtf = prices.multi_timeframe_momentum(asset)
                         mom = prices.momentum(asset, hist)
 
+                        try:
+                            live_px = float((prices.cache or {}).get(asset) or 0)
+                            if live_px <= 0:
+                                live_px = float((prices.get_prices() or {}).get(asset) or 0)
+                        except Exception:
+                            live_px = 0.0
+                        if slug and live_px > 0 and slug not in window_open_px:
+                            rem = float(m.get("_remaining_s") or 0)
+                            win_s = float(m.get("_window_seconds") or 300)
+                            if rem <= win_s + 5:
+                                window_open_px[slug] = live_px
+                        open_px = window_open_px.get(slug)
+                        vs_open = 0.0
+                        if open_px and open_px > 0 and live_px > 0:
+                            vs_open = max(-1.0, min(1.0, (live_px - open_px) / open_px * 150))
+
                         feat_up = build_features(
-                            m, book_up, external_momentum=mom, side="up", book_other=book_down
+                            m, book_up, external_momentum=mom, side="up",
+                            book_other=book_down, vs_open=vs_open,
                         )
                         feat_dn = build_features(
-                            m, book_down, external_momentum=mom, side="down", book_other=book_up
+                            m, book_down, external_momentum=mom, side="down",
+                            book_other=book_up, vs_open=vs_open,
                         )
 
                         arb = ensemble.complete_set_arb(
@@ -372,13 +394,8 @@ def run_paper(config: dict):
                                     and risk.can_open(size_dn, open_count=open_n + 1)
                                 ):
                                     meta = _timing_meta(
-                                        m,
-                                        feat_up,
-                                        arb["score"],
-                                        arb.get("edge") or 0,
-                                        mom,
-                                        regime,
-                                        "arb",
+                                        m, feat_up, arb["score"], arb.get("edge") or 0,
+                                        mom, regime, "arb",
                                     )
                                     legs_ok = True
                                     for side, token, price, sz in [
@@ -386,20 +403,14 @@ def run_paper(config: dict):
                                         ("down", down_token, dn_px, size_dn),
                                     ]:
                                         order = executor.place_order(
-                                            token,
-                                            "buy",
-                                            price,
-                                            sz,
-                                            mid_id,
+                                            token, "buy", price, sz, mid_id,
                                             already_aggressive=True,
                                         )
                                         if not order:
                                             legs_ok = False
                                             break
                                         tracker.add(
-                                            order,
-                                            direction=side,
-                                            slug=slug,
+                                            order, direction=side, slug=slug,
                                             end_date=m.get("endDate") or m.get("end_date_iso"),
                                             meta=meta,
                                         )
@@ -474,9 +485,7 @@ def run_paper(config: dict):
                         if not order:
                             continue
                         tracker.add(
-                            order,
-                            direction=direction,
-                            slug=slug,
+                            order, direction=direction, slug=slug,
                             end_date=m.get("endDate") or m.get("end_date_iso"),
                             meta=meta,
                         )
@@ -490,7 +499,8 @@ def run_paper(config: dict):
                         logger.info(
                             f"{tag} {direction.upper()} | score={sig['score']:.3f} | "
                             f"entry={entry:.3f} | edge={edge if edge is not None else 0:.3f} | "
-                            f"mom={mom:.2f} (1m={mtf['m1']:.2f} 5m={mtf['m5']:.2f} 15m={mtf['m15']:.2f}) | "
+                            f"mom={mom:.2f} vs_open={vs_open:.2f} "
+                            f"(1m={mtf['m1']:.2f} 5m={mtf['m5']:.2f} 15m={mtf['m15']:.2f}) | "
                             f"size=${size:.1f} | h={meta['hour_utc']} wd={meta['weekday_utc']} "
                             f"win={meta['window']} t_left={meta['time_remaining_s']:.0f}s | {slug[:40]}"
                         )
