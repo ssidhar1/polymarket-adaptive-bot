@@ -1,56 +1,50 @@
 # ASTF — Adaptive Short-Term Filter
 
-**Aggressive, self-learning, multi-signal paper trader** for Polymarket 5m / 15m BTC & ETH Up/Down markets.
+**Aggressive, self-learning paper trader** for Polymarket 5m / 15m BTC & ETH Up/Down markets.
 
-> **Truth**: No bot is “super duper profitable” by default. Most short-term Polymarket bots lose after fees. This system hunts structural + directional edges with hard circuit breakers. Paper extensively before any real money.
+> **Truth**: These windows resolve ~50/50 long-term. After dynamic taker fees (~1.1–1.75%), most bots lose. This system only fires when momentum + vs-open drift + book pressure agree and the share is still cheap enough for positive EV. Paper extensively before any live capital.
 
 ## What it does
-- **Complete-set arbitrage** when Up + Down < ~1 after costs
-- **Multi-timeframe momentum** (Binance 1m/5m/15m klines + local blend)
-- **Ensemble signals** — momentum, book imbalance, time decay, spread, depth filter
-- **Kelly-lite sizing** + exploration budget
-- **Hardened resolution** — multi-path Gamma lookup (slug, path, events, winner flags)
-- **SQLite trade store** (`trades.db`) with daily + all-time reports
-- Adaptive threshold + regime detection
+- **Dynamic fees** matching Polymarket `crypto_fees_v2` (`rate × p × (1-p)`)
+- **vs_open drift** — locks first Binance mid inside the window as a proxy for Chainlink TWAP open
+- **Late-window boost** when remaining < 160s, drive is strong, and entry is still cheap
+- **Complete-set arbitrage** when Up + Down < 1 after fees
+- **Multi-timeframe momentum** (Binance 1m/5m/15m) blended with local history
+- **Cross-book imbalance** + time/spread/depth filters
+- **Kelly-lite sizing** + hard circuit breakers (daily loss, max drawdown)
+- **Self-learning** with idle decay so thresholds don't freeze forever
+- **PROOF logs** every ~5 min with session PnL, win rate, and bank delta (no volume required)
 
 ## Quick Start
-
 ```bash
 git clone https://github.com/ssidhar1/polymarket-adaptive-bot.git
 cd polymarket-adaptive-bot
 python -m venv venv && source venv/bin/activate
 pip install -r requirements.txt
 cp config.example.yaml config.yaml
-
-python -m scripts.scan_once
 python -m src.main --mode paper
-python -m scripts.daily_report
 ```
+
+Watch for `PROOF` lines in logs. Redeploy only when you pull code changes.
 
 ## Architecture
-```
-Scanner (Gamma) → Books (CLOB) + MTF Momentum (Binance klines)
-       ↓
-Features + Ensemble (directional + complete-set arb)
-       ↓
-Kelly-lite sizing + Risk circuit breakers
-       ↓
-Paper execution → Hardened resolution → Learner + trades.db (SQLite)
-```
+Scanner (Gamma multi-slug) → Books (CLOB) + Binance MTF + vs_open
+→ Features + Ensemble (directional + complete-set)
+→ Kelly-lite + risk breakers → Paper fills (dynamic fees)
+→ Resolution (Gamma multi-path) → Learner + PROOF logs
 
 ## Risk
-- Max position size, concurrent limits
-- Daily loss limit → pause (clears next day)
-- Max drawdown → hard pause
-- Thin-book filter + per-market cooldown
-- Stale position force-exit
+- Position size, concurrent, daily loss, max drawdown circuit breakers
+- Against-momentum and expensive-entry rejects
+- Stale position soft (mid) then hard (0.5) exit
+- Per-market cooldown
 
 ## Status
-- Paper mode is fully end-to-end
-- Live mode remains locked
-- Profitability is not guaranteed — prove expectancy in paper first
+- Paper mode is fully end-to-end and hardened
+- Live mode locked until paper expectancy is clear
+- Profitability is not guaranteed — prove it in logs first
 
 ## Disclaimer
-Experimental. You can lose money. Paper first.
+Experimental. You can lose money. Paper first. No volume needed until edge is real.
 
 MIT
