@@ -1,10 +1,12 @@
 """
 Advanced signal ensemble + structural edge detectors.
-Profitability-first: ~50/50 base rate + fees means only strong, cheap setups.
+Uses Polymarket-style dynamic taker fees and optional vs-open drift.
 """
 from typing import Dict, Optional
 import numpy as np
 import logging
+
+from src.utils.fees import edge_after_taker_fee, taker_fee_rate
 
 logger = logging.getLogger("astf.ensemble")
 
@@ -15,8 +17,9 @@ class EnsembleSignal:
         risk = config.get("risk", {})
         self.min_score = sig.get("min_score", 0.55)
         self.min_edge = risk.get("min_edge_after_fees", 0.02)
-        self.fee_rate = float(sig.get("fee_rate", 0.01))
-        self.fee_buffer = self.fee_rate * 2
+        # Fallback flat rate only if schedule missing; real path uses dynamic fees
+        self.fee_rate = float(sig.get("fee_rate", 0.07))
+        self.fee_buffer = 0.02  # complete-set safety buffer
         self.min_depth_usd = sig.get("min_depth_usd", 20.0)
         self.min_time_remaining = sig.get("min_time_remaining_pct", 0.10)
         self.max_time_remaining = sig.get("max_time_remaining_pct", 0.98)
@@ -57,8 +60,12 @@ class EnsembleSignal:
         if not (0.02 < up_px < 0.98 and 0.02 < down_px < 0.98):
             return None
         total = up_px + down_px
-        edge = 1.0 - total - self.fee_buffer
-        min_edge = 0.01 if self.degen else 0.015
+        # Both legs pay taker fee
+        fee = taker_fee_rate(up_px, rate=self.fee_rate) + taker_fee_rate(
+            down_px, rate=self.fee_rate
+        )
+        edge = 1.0 - total - fee - 0.005
+        min_edge = 0.008 if self.degen else 0.012
         if edge > min_edge:
             return {
                 "type": "complete_set",
@@ -74,6 +81,7 @@ class EnsembleSignal:
 
     def directional_score(self, features: Dict, preferred_side: Optional[str] = None) -> Dict:
         mom = float(features.get("momentum", 0.0) or 0.0)
+        vs_open = float(features.get("vs_open", 0.0) or 0.0)
         imb = float(features.get("book_imbalance", 0.0) or 0.0)
         time_left = float(features.get("time_remaining_pct", 0.5) or 0.5)
         remaining_s = float(features.get("time_remaining_s", 300) or 300)
@@ -86,6 +94,7 @@ class EnsembleSignal:
         depth = float(features.get("depth_usd", 0.0) or 0.0)
         window_s = int(features.get("window_seconds", 900) or 900)
         feat_side = str(features.get("side") or "").lower()
+        fee_rate = float(features.get("fee_rate") or self.fee_rate)
 
         if depth < self.min_depth_usd:
             return self._reject("thin_book")
@@ -93,7 +102,6 @@ class EnsembleSignal:
         if remaining_s > window_s + 15:
             return self._reject("too_early")
 
-        # Hard floor: need at least 45s for fill + resolution lag
         if remaining_s < 45:
             return self._reject("near_expiry")
         if time_left < self.min_time_remaining:
@@ -108,42 +116,46 @@ class EnsembleSignal:
         if preferred_side in ("up", "down"):
             direction = preferred_side
         else:
-            direction = "up" if (mom + 0.7 * imb) >= 0 else "down"
+            direction = "up" if (mom + 0.5 * vs_open + 0.5 * imb) >= 0 else "down"
 
         signed_mom = mom if direction == "up" else -mom
+        signed_open = vs_open if direction == "up" else -vs_open
         if feat_side in ("up", "down") and feat_side == direction:
             signed_imb = imb
         else:
             signed_imb = imb if direction == "up" else -imb
 
-        # Never bet against momentum — 50/50 base rate + fees needs the wind at your back
-        if signed_mom < self.min_abs_momentum * 0.5:
+        # Blend short TF momentum with vs-open (closer to resolution definition)
+        directional_drive = 0.55 * signed_mom + 0.45 * signed_open
+
+        if directional_drive < self.min_abs_momentum * 0.45:
             return self._reject("against_mom")
 
-        if abs(signed_mom) < self.min_abs_momentum and abs(signed_imb) < 0.12:
+        if abs(directional_drive) < self.min_abs_momentum and abs(signed_imb) < 0.12:
             return self._reject("weak_signal")
 
-        short_w = 0.55 if window_s <= 360 else 0.42
-        imb_w = 0.22 if window_s <= 360 else 0.28
+        short_w = 0.50 if window_s <= 360 else 0.40
+        open_w = 0.22 if window_s <= 360 else 0.18
+        imb_w = 0.16 if window_s <= 360 else 0.22
 
         time_term = 1.0 - abs(time_left - 0.35)
         cheap_term = max(0.0, (0.52 - entry) / 0.52)
 
-        # Late-window boost: strong mom + cheap share with 60–180s left is where mispricing lives
         late_boost = 0.0
-        if 60 <= remaining_s <= 180 and signed_mom > 0.2 and entry < 0.48:
-            late_boost = 0.08 * signed_mom
+        if 60 <= remaining_s <= 180 and directional_drive > 0.2 and entry < 0.48:
+            late_boost = 0.08 * directional_drive
 
         raw = (
             short_w * signed_mom
+            + open_w * signed_open
             + imb_w * signed_imb
-            + 0.10 * time_term
-            + 0.14 * cheap_term
+            + 0.08 * time_term
+            + 0.12 * cheap_term
             + late_boost
         )
 
         if self.degen:
-            raw += 0.02 * max(0.0, signed_mom)
+            raw += 0.02 * max(0.0, directional_drive)
 
         if vol == "high":
             raw *= 0.90
@@ -157,25 +169,24 @@ class EnsembleSignal:
 
         score = float(np.clip(0.5 + raw * 0.55, 0.0, 1.0))
 
-        mom_s = max(0.0, signed_mom)
+        drive_s = max(0.0, directional_drive)
         imb_s = max(0.0, signed_imb)
-        agree = 1.0 if (signed_mom > 0 and signed_imb > 0) else 0.50
-        signal_strength = float(np.clip(0.60 * mom_s + 0.40 * imb_s, 0.0, 1.0)) * agree
+        agree = 1.0 if (directional_drive > 0 and signed_imb > 0) else 0.50
+        signal_strength = float(np.clip(0.65 * drive_s + 0.35 * imb_s, 0.0, 1.0)) * agree
         cheap_boost = 1.0 + 0.20 * cheap_term
         max_lift = self.max_prob_lift * (1.10 if self.degen else 1.0)
         lift = min(signal_strength * max_lift * cheap_boost, max_lift)
         est_prob = float(np.clip(entry + lift, 0.05, 0.95))
 
-        edge_after_fees = est_prob - entry - self.fee_rate
+        edge_after_fees = edge_after_taker_fee(est_prob, entry, rate=fee_rate)
         min_edge = self.min_edge if not self.degen else max(0.015, self.min_edge * 0.75)
         if edge_after_fees < min_edge:
             return self._reject("neg_ev")
 
-        # Extra gate: need positive signed mom for a hard pass (exploration can still soften in main)
         hard_pass = (
             score >= self.min_score
             and edge_after_fees >= min_edge
-            and signed_mom >= self.min_abs_momentum
+            and directional_drive >= self.min_abs_momentum
             and entry <= self.max_entry
         )
 
@@ -189,6 +200,8 @@ class EnsembleSignal:
             "pass": hard_pass,
             "components": {
                 "momentum": signed_mom,
+                "vs_open": signed_open,
+                "drive": directional_drive,
                 "imbalance": signed_imb,
                 "time": time_left,
                 "vol": vol,
@@ -197,6 +210,7 @@ class EnsembleSignal:
                 "raw": raw,
                 "lift": lift,
                 "edge": edge_after_fees,
+                "fee": taker_fee_rate(entry, rate=fee_rate),
                 "late_boost": late_boost,
             },
         }
