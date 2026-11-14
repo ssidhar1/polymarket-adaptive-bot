@@ -7,9 +7,11 @@ import logging
 import math
 import uuid
 
+from src.utils.fees import taker_fee_rate
+
 logger = logging.getLogger("astf.execution.paper")
 
-MIN_NOTIONAL = 0.50  # ignore dust
+MIN_NOTIONAL = 0.50
 
 
 def _finite(x: float, default: float = 0.0) -> float:
@@ -23,8 +25,9 @@ def _finite(x: float, default: float = 0.0) -> float:
 
 
 class PaperExecutor:
-    def __init__(self, fee_rate: float = 0.01, extra_slippage: float = 0.0):
-        self.fee_rate = max(0.0, min(0.1, float(fee_rate)))
+    def __init__(self, fee_rate: float = 0.07, extra_slippage: float = 0.0):
+        # fee_rate here is the schedule "rate" (e.g. 0.07), not flat %
+        self.fee_rate = max(0.0, min(0.25, float(fee_rate)))
         self.extra_slippage = max(0.0, float(extra_slippage or 0.0))
         self.open_orders = {}
         self.closed_trades = []
@@ -38,10 +41,6 @@ class PaperExecutor:
         market_id: str,
         already_aggressive: bool = True,
     ) -> Optional[Dict]:
-        """
-        already_aggressive=True when caller passed best ask/bid already.
-        Returns None if inputs are invalid (caller must skip).
-        """
         if not token_id or not market_id:
             logger.warning("PAPER SKIP | missing token_id or market_id")
             return None
@@ -67,7 +66,8 @@ class PaperExecutor:
             logger.warning("PAPER SKIP | non-finite shares")
             return None
 
-        fee = cost * self.fee_rate
+        fee_frac = taker_fee_rate(fill_price, rate=self.fee_rate)
+        fee = cost * fee_frac
         order_id = str(uuid.uuid4())[:8]
 
         order = {
@@ -80,12 +80,14 @@ class PaperExecutor:
             "size_usd": cost,
             "shares": shares,
             "fee": fee,
+            "fee_frac": fee_frac,
             "status": "filled",
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         self.open_orders[order_id] = order
         logger.info(
-            f"PAPER FILL | {side.upper()} {shares:.2f} @ {fill_price:.3f} | fee=${fee:.3f}"
+            f"PAPER FILL | {side.upper()} {shares:.2f} @ {fill_price:.3f} | "
+            f"fee=${fee:.3f} ({fee_frac:.2%})"
         )
         return order
 
