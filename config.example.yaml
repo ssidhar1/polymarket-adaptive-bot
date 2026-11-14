@@ -1,11 +1,11 @@
 bankroll: 1000.0
 
 risk:
-  max_position_pct: 0.04
-  max_concurrent: 4
+  max_position_pct: 0.045
+  max_concurrent: 5
   daily_loss_limit_pct: 0.08
   max_drawdown_pct: 0.15
-  min_edge_after_fees: 0.02
+  min_edge_after_fees: 0.018
 
 markets:
   targets:
@@ -16,29 +16,30 @@ markets:
     - "15m"
 
 signals:
-  min_score: 0.56
+  min_score: 0.54
   degen_mode: true
-  fee_rate: 0.01
-  # 5m/15m resolve ~50/50 — only buy relatively cheap shares
-  max_entry_price: 0.55
-  min_abs_momentum: 0.12
+  # Polymarket crypto_fees_v2 rate (dynamic fee ≈ rate * p * (1-p))
+  fee_rate: 0.07
+  # Prefer cheap shares — 5m/15m are ~50/50 base rate
+  max_entry_price: 0.54
+  min_abs_momentum: 0.11
   lookback_minutes: 30
-  min_depth_usd: 20.0
-  min_time_remaining_pct: 0.10
+  min_depth_usd: 15.0
+  min_time_remaining_pct: 0.08
   max_time_remaining_pct: 0.98
-  max_prob_lift: 0.10
+  max_prob_lift: 0.11
 
 learning:
-  calibration_window: 150
-  regime_lookback: 40
-  # Keep exploration small; most random 5m bets lose after fees
-  exploration_pct: 0.03
+  calibration_window: 120
+  regime_lookback: 35
+  # Small exploration only; random fills lose after fees
+  exploration_pct: 0.025
 
 execution:
   prefer_maker: true
-  max_slippage_bps: 20
-  cycle_seconds: 10
-  cooldown_seconds: 60
-  max_markets_per_cycle: 12
-  stale_grace_seconds: 300
-  stale_max_hold_minutes: 35
+  max_slippage_bps: 25
+  cycle_seconds: 8
+  cooldown_seconds: 45
+  max_markets_per_cycle: 14
+  stale_grace_seconds: 280
+  stale_max_hold_minutes: 32
