@@ -5,6 +5,8 @@ from typing import Dict, Optional, Any
 import logging
 from datetime import datetime, timezone
 
+from src.utils.fees import parse_fee_schedule
+
 logger = logging.getLogger("astf.features")
 
 
@@ -87,24 +89,18 @@ def best_bid(book: Dict) -> Optional[float]:
 
 
 def cross_book_imbalance(book_up: Dict, book_down: Dict) -> float:
-    """
-    Positive → market leaning UP (more bid pressure on up / ask pressure on down).
-    Uses relative mid skew when both mids exist, blended with single-side imbalances.
-    """
     up_mid = book_up.get("mid")
     dn_mid = book_down.get("mid")
     skew = 0.0
     if up_mid is not None and dn_mid is not None:
         try:
             u, d = float(up_mid), float(dn_mid)
-            # If up is expensive relative to down, market prices UP higher
             skew = max(-1.0, min(1.0, (u - d) * 2.0))
         except (TypeError, ValueError):
             skew = 0.0
 
     imb_up = compute_book_imbalance(book_up.get("bids") or [], book_up.get("asks") or [])
     imb_dn = compute_book_imbalance(book_down.get("bids") or [], book_down.get("asks") or [])
-    # Bid-heavy up book and ask-heavy down book both support UP
     side = 0.5 * imb_up - 0.5 * imb_dn
     return max(-1.0, min(1.0, 0.55 * skew + 0.45 * side))
 
@@ -115,6 +111,7 @@ def build_features(
     external_momentum: float = 0.0,
     side: str = "up",
     book_other: Optional[Dict] = None,
+    vs_open: float = 0.0,
 ) -> Dict:
     bids = book.get("bids", []) or []
     asks = book.get("asks", []) or []
@@ -132,7 +129,6 @@ def build_features(
     end_iso = market.get("endDate") or market.get("end_date_iso")
     tfeat = compute_time_features(end_iso, window_s)
 
-    # Prefer true cross-book signal when both books available
     if book_other is not None:
         if side == "up":
             imbalance = cross_book_imbalance(book, book_other)
@@ -140,7 +136,6 @@ def build_features(
             imbalance = -cross_book_imbalance(book_other, book)
     else:
         imbalance = compute_book_imbalance(bids, asks)
-        # Single-book imbalance is already side-local; no extra flip here
 
     depth = compute_depth_usd(bids, asks)
 
@@ -155,8 +150,11 @@ def build_features(
     else:
         vol_regime = "normal"
 
+    fee_rate = parse_fee_schedule(market, default_rate=0.07)
+
     return {
         "momentum": external_momentum,
+        "vs_open": float(vs_open or 0.0),
         "book_imbalance": imbalance,
         "volatility_regime": vol_regime,
         "time_remaining_pct": tfeat["time_remaining_pct"],
@@ -169,4 +167,5 @@ def build_features(
         "window_seconds": window_s,
         "market_slug": slug,
         "side": side,
+        "fee_rate": fee_rate,
     }
