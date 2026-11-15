@@ -1,5 +1,6 @@
 """
 Paper trading engine - simulates fills with realistic fees and slippage.
+Optional maker rebate (20% of fee returned) when prefer_maker is active.
 """
 from typing import Dict, Optional
 from datetime import datetime, timezone
@@ -25,10 +26,11 @@ def _finite(x: float, default: float = 0.0) -> float:
 
 
 class PaperExecutor:
-    def __init__(self, fee_rate: float = 0.07, extra_slippage: float = 0.0):
-        # fee_rate here is the schedule "rate" (e.g. 0.07), not flat %
+    def __init__(self, fee_rate: float = 0.07, extra_slippage: float = 0.0, prefer_maker: bool = True):
         self.fee_rate = max(0.0, min(0.25, float(fee_rate)))
         self.extra_slippage = max(0.0, float(extra_slippage or 0.0))
+        self.prefer_maker = bool(prefer_maker)
+        self.maker_rebate = 0.20
         self.open_orders = {}
         self.closed_trades = []
 
@@ -67,6 +69,8 @@ class PaperExecutor:
             return None
 
         fee_frac = taker_fee_rate(fill_price, rate=self.fee_rate)
+        if self.prefer_maker:
+            fee_frac *= (1.0 - self.maker_rebate)
         fee = cost * fee_frac
         order_id = str(uuid.uuid4())[:8]
 
@@ -81,13 +85,14 @@ class PaperExecutor:
             "shares": shares,
             "fee": fee,
             "fee_frac": fee_frac,
+            "maker": self.prefer_maker,
             "status": "filled",
             "timestamp": datetime.now(timezone.utc).isoformat(),
         }
         self.open_orders[order_id] = order
         logger.info(
             f"PAPER FILL | {side.upper()} {shares:.2f} @ {fill_price:.3f} | "
-            f"fee=${fee:.3f} ({fee_frac:.2%})"
+            f"fee=${fee:.3f} ({fee_frac:.2%}){' [maker]' if self.prefer_maker else ''}"
         )
         return order
 
