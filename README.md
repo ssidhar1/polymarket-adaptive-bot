@@ -5,12 +5,12 @@
 > ~50/50 base rate + dynamic fees. Edge from structure: TWAP-lock, cross-asset lag, cross-window lead-lag, maker rebate, setup-bucket learning, and regime-conditional pyramiding.
 
 ## Unique edges
-- **TWAP-lock** — vs_open dominates near expiry (Chainlink 60s TWAP resolution)
+- **TWAP-lock** — vs_open dominates near expiry
 - **Cross-asset lag** — BTC informs ETH and vice versa
-- **Cross-window lead-lag** — 5m mid bias informs overlapping 15m
-- **Maker-rebate adjusted edge** — ~20% effective fee reduction when prefer_maker
+- **Cross-window lead-lag** — real 5m book mid informs overlapping 15m
+- **Maker-rebate simulation** — paper fills apply ~20% fee reduction when prefer_maker
 - **Setup-bucket learning** — boosts/suppresses by (hour, remaining, vs_open strength)
-- **Regime-conditional pyramiding** — half-size second add in favorable regime
+- **Regime-conditional pyramiding** — half-size second add, once per market, in favorable regime
 - Aggressive compounding Kelly in degen + favorable
 - Dynamic fees, complete-set arb, PROOF logs, idle-decay, open-position persistence
 
@@ -26,7 +26,7 @@ python -m src.main --mode paper
 
 Watch `PROOF` lines. Redeploy Northflank after pull.
 
-Paper first. Live locked until expectancy is clear. No volume required to judge from logs.
+Paper first. Live locked until expectancy is clear.
 
 Experimental. You can lose money.
 
