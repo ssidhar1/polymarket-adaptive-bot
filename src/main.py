@@ -77,6 +77,7 @@ def _timing_meta(m: dict, feat: dict, score: float, edge: float, mom: float, reg
         "momentum": float(mom or 0),
         "regime": regime or "",
         "trade_type": trade_type,
+        "vs_open": float(feat.get("vs_open") or 0),
     }
 
 
@@ -224,6 +225,10 @@ def run_paper(config: dict):
                                     "entry_price": trade["entry_price"],
                                     "pnl": trade["pnl"],
                                     "stale": False,
+                                    "hour_utc": trade.get("hour_utc"),
+                                    "time_remaining_s": trade.get("time_remaining_s"),
+                                    "vs_open": trade.get("vs_open"),
+                                    "momentum": trade.get("momentum"),
                                 })
                                 trade_log.log(trade, score=trade.get("score", 0))
                                 session_resolves += 1
@@ -365,14 +370,30 @@ def run_paper(config: dict):
                         if open_px and open_px > 0 and live_px > 0:
                             vs_open = max(-1.0, min(1.0, (live_px - open_px) / open_px * 150))
 
+                        # Cross-asset lag
+                        other_asset = "eth" if asset == "btc" else "btc"
+                        other_vs = 0.0
+                        other_slugs = [k for k in window_open_px if other_asset in k.lower()]
+                        if other_slugs and live_px > 0:
+                            o_open = window_open_px.get(other_slugs[-1])
+                            if o_open and o_open > 0:
+                                try:
+                                    o_live = float((prices.cache or {}).get(other_asset) or 0)
+                                    if o_live > 0:
+                                        other_vs = max(-1.0, min(1.0, (o_live - o_open) / o_open * 150))
+                                except Exception:
+                                    pass
+
                         feat_up = build_features(
                             m, book_up, external_momentum=mom, side="up",
                             book_other=book_down, vs_open=vs_open,
                         )
+                        feat_up["other_vs_open"] = other_vs
                         feat_dn = build_features(
                             m, book_down, external_momentum=mom, side="down",
                             book_other=book_up, vs_open=vs_open,
                         )
+                        feat_dn["other_vs_open"] = other_vs
 
                         arb = ensemble.complete_set_arb(
                             up_mid, down_mid, up_ask=up_ask, down_ask=down_ask
@@ -381,6 +402,7 @@ def run_paper(config: dict):
                             budget = risk.size_position(
                                 arb["score"],
                                 edge_after_fees=arb.get("edge"),
+                                regime=regime,
                             )
                             up_px = float(arb["up_price"])
                             dn_px = float(arb["down_price"])
@@ -465,12 +487,28 @@ def run_paper(config: dict):
                         direction = sig["direction"]
                         edge = sig.get("edge_after_fees")
 
+                        # Setup-bucket boost
+                        boost = 0.0
+                        try:
+                            boost = learner.get_bucket_boost(
+                                datetime.now(timezone.utc).hour,
+                                float(feat.get("time_remaining_s") or 0),
+                                vs_open,
+                            )
+                        except Exception:
+                            boost = 0.0
+                        if boost:
+                            sig["score"] = max(0.0, min(1.0, sig.get("score", 0.5) + boost))
+                            if edge is not None:
+                                edge = edge + boost * 0.5
+
                         size = risk.size_position(
                             confidence=sig["score"],
                             est_prob=sig.get("est_prob"),
                             price=entry,
                             is_exploration=is_expl,
                             edge_after_fees=edge,
+                            regime=regime,
                         )
                         if size <= 0 or not risk.can_open(size, open_count=open_n):
                             continue
@@ -499,7 +537,7 @@ def run_paper(config: dict):
                         logger.info(
                             f"{tag} {direction.upper()} | score={sig['score']:.3f} | "
                             f"entry={entry:.3f} | edge={edge if edge is not None else 0:.3f} | "
-                            f"mom={mom:.2f} vs_open={vs_open:.2f} "
+                            f"mom={mom:.2f} vs_open={vs_open:.2f} other={other_vs:.2f} "
                             f"(1m={mtf['m1']:.2f} 5m={mtf['m5']:.2f} 15m={mtf['m15']:.2f}) | "
                             f"size=${size:.1f} | h={meta['hour_utc']} wd={meta['weekday_utc']} "
                             f"win={meta['window']} t_left={meta['time_remaining_s']:.0f}s | {slug[:40]}"
