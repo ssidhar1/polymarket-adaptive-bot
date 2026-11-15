@@ -2,15 +2,17 @@
 
 **Aggressive, self-learning paper trader** for Polymarket 5m / 15m BTC & ETH Up/Down markets.
 
-> **Reality**: ~50/50 base rate + dynamic taker fees. Edge must come from structure (TWAP lock, cross-asset lag, maker rebate, setup-specific learning), not generic momentum.
+> ~50/50 base rate + dynamic fees. Edge from structure: TWAP-lock, cross-asset lag, cross-window lead-lag, maker rebate, setup-bucket learning, and regime-conditional pyramiding.
 
-## Unique edges now in the code
-- **TWAP-lock scoring** — vs_open weighted much higher near expiry (resolution is Chainlink 60s TWAP)
-- **Cross-asset lag** — BTC vs_open informs ETH (and vice versa) when one is leading
-- **Maker-rebate adjusted edge** — effective fee reduced ~20% when prefer_maker (closer to real economics)
-- **Setup-bucket learning** — tracks win rate by (hour, remaining bucket, vs_open strength) and boosts/suppresses those combinations
-- **Aggressive compounding Kelly** — higher fraction in degen + favorable regime
-- Dynamic fees, complete-set arb, PROOF logs, idle-decay learner, open-position persistence
+## Unique edges
+- **TWAP-lock** — vs_open dominates near expiry (Chainlink 60s TWAP resolution)
+- **Cross-asset lag** — BTC informs ETH and vice versa
+- **Cross-window lead-lag** — 5m mid bias informs overlapping 15m
+- **Maker-rebate adjusted edge** — ~20% effective fee reduction when prefer_maker
+- **Setup-bucket learning** — boosts/suppresses by (hour, remaining, vs_open strength)
+- **Regime-conditional pyramiding** — half-size second add in favorable regime
+- Aggressive compounding Kelly in degen + favorable
+- Dynamic fees, complete-set arb, PROOF logs, idle-decay, open-position persistence
 
 ## Quick Start
 ```bash
@@ -24,9 +26,8 @@ python -m src.main --mode paper
 
 Watch `PROOF` lines. Redeploy Northflank after pull.
 
-## Status
-Paper mode end-to-end. Live locked until paper expectancy is clear. No volume required to judge from logs.
+Paper first. Live locked until expectancy is clear. No volume required to judge from logs.
 
-Experimental. You can lose money. Paper first.
+Experimental. You can lose money.
 
 MIT
