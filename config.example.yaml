@@ -47,12 +47,15 @@ execution:
   stale_grace_seconds: 260
   stale_max_hold_minutes: 30
 
-# Paper-only exit-policy research. No order execution is connected.
+# Paper-only automatic exits. This never submits exchange orders.
 exit_policy:
-  enabled: false
+  enabled: true
   take_profit_pct: 0.20
   stop_loss_pct: 0.15
   max_hold_seconds: 180
+  max_book_age_seconds: 3
+  fill_fraction: 0.50
+  slippage_bps: 20
 
 # Dormant live adapter. The strategy loop remains paper-only; do not enable
 # these settings until live lifecycle integration has a separate review.
