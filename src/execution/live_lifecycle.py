@@ -218,12 +218,11 @@ class LiveLifecycle:
                 return False
             # Fill rows are an immutable audit trail. Fees are retained as
             # exchange-reported bps; do not invent a fee formula/net P&L here.
-            old = db.execute("SELECT filled_size FROM live_order_intents WHERE intent_key=?",
-                             (matched_order["intent_key"],)).fetchone()
-            filled = _decimal(old[0] if old else "0", "persisted filled size") + size
-            db.execute("UPDATE live_order_intents SET filled_size=?,last_reconciled_at=? WHERE intent_key=?",
-                       (str(filled), datetime.now(timezone.utc).isoformat(), matched_order["intent_key"]))
-            matched_order["filled_size"] = str(filled)
+            # Filled quantity is derived from the exchange's current open-order
+            # matched size, or from deduplicated trade rows once the order is
+            # terminal. Never add trade totals to a matched-size snapshot.
+            db.execute("UPDATE live_order_intents SET last_reconciled_at=? WHERE intent_key=?",
+                       (datetime.now(timezone.utc).isoformat(), matched_order["intent_key"]))
         return True
 
     def reconcile(self) -> dict:
@@ -320,7 +319,9 @@ class LiveLifecycle:
                     # A complete account-trade history covering the order's
                     # full original quantity proves it is filled. Otherwise
                     # absence alone does not prove cancellation or expiry.
-                    filled = _decimal(row.get("filled_size", "0"), "filled quantity")
+                    fill_sum = db.execute("SELECT COALESCE(SUM(CAST(size AS REAL)),0) FROM live_fills WHERE order_id=?",
+                                          (oid,)).fetchone()[0]
+                    filled = _decimal(fill_sum, "deduplicated fill quantity")
                     original = _decimal(row.get("size", "0"), "original order quantity")
                     if original > 0 and filled >= original:
                         status, reason = "FILLED", "Account trade fills cover the original order quantity"
