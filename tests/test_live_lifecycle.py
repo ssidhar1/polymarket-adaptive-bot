@@ -338,3 +338,13 @@ def test_delayed_trade_indexing_does_not_double_count_matched_size(tmp_path):
     with executor._db() as db:
         assert db.execute("SELECT filled_size FROM live_order_intents").fetchone()[0] == "4"
         assert db.execute("SELECT COUNT(*) FROM live_fills").fetchone()[0] == 1
+
+def test_expiry_manager_never_cancels_manual_wallet_orders(tmp_path):
+    client, executor, lifecycle = setup(tmp_path)
+    client.orders = [exchange_order(
+        order_id="manual-order",
+        expiry=datetime.now(timezone.utc) - timedelta(seconds=2),
+    )]
+    lifecycle.reconcile()
+    assert lifecycle.cancel_expired_orders() == []
+    assert client.cancelled == []
