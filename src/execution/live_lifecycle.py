@@ -255,6 +255,10 @@ class LiveLifecycle:
                     row["status"] = "ACCEPTED"
                 elif len(matches) > 1:
                     logger.error("Ambiguous recovery for intent %s; manual reconciliation required", row["intent_key"])
+                    with self.executor._db() as db:
+                        db.execute("UPDATE live_order_intents SET status='NOT_OPEN_RECONCILE_REQUIRED',terminal_reason=? WHERE intent_key=?",
+                                   ("Multiple exchange orders match intent fingerprint; manual reconciliation required", row["intent_key"]))
+                    row["status"] = "NOT_OPEN_RECONCILE_REQUIRED"
 
         intents_by_id = {str(r.get("order_id")): r for r in rows if r.get("order_id")}
         new_fills = 0
