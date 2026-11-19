@@ -34,10 +34,11 @@ def _level_size(level: Any) -> float:
 
 def detect_window_seconds(slug: Optional[str], question: Optional[str] = None) -> int:
     text = f"{slug or ''} {question or ''}".lower()
-    if "5m" in text or "5 min" in text or "5-minute" in text or "5-min" in text:
-        return 5 * 60
+    # Check 15m first: the substring "5m" is contained in "15m".
     if "15m" in text or "15 min" in text or "15-minute" in text or "15-min" in text:
         return 15 * 60
+    if "5m" in text or "5 min" in text or "5-minute" in text or "5-min" in text:
+        return 5 * 60
     return 15 * 60
 
 
