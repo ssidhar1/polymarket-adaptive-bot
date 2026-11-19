@@ -323,3 +323,18 @@ def test_live_entrypoint_remains_hard_disabled(tmp_path):
     with pytest.raises(SystemExit) as exc:
         run_live(config())
     assert exc.value.code == 2
+
+def test_delayed_trade_indexing_does_not_double_count_matched_size(tmp_path):
+    client, executor, lifecycle = setup(tmp_path)
+    seed_order(executor)
+    client.orders = [exchange_order(matched="4")]
+    client.trades = []
+    lifecycle.reconcile()
+    with executor._db() as db:
+        assert db.execute("SELECT filled_size FROM live_order_intents").fetchone()[0] == "4"
+
+    client.trades = [exchange_trade(size="2")]
+    lifecycle.reconcile()
+    with executor._db() as db:
+        assert db.execute("SELECT filled_size FROM live_order_intents").fetchone()[0] == "4"
+        assert db.execute("SELECT COUNT(*) FROM live_fills").fetchone()[0] == 1
