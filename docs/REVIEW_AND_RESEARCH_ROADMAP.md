@@ -11,11 +11,11 @@ Review date: 2026-11-18
 
 ## High-priority issues still requiring work
 
-### 1. Daily risk state is not restart-safe
-The main loop calls `risk.clear_daily_pause("service restart")`. Daily P&L, pause state, and daily exploration usage are not fully persisted/restored. A restart can therefore reset intraday loss controls. Persist the UTC date, daily realized P&L, pause reason/state, peak bankroll, and exploration usage atomically; do not clear a same-day daily-loss pause on restart.
+### 1. Daily risk state — hardened, still needs fault-injection testing
+This branch persists same-day realized P&L, pause state/reason, and exploration usage, restores them on restart, and no longer clears a daily pause on service startup. The peak bankroll is also restored and drawdown is recalculated. Validate with forced process termination immediately after a loss-limit breach and confirm the pause survives restart.
 
-### 2. Stale positions can be booked at arbitrary marks
-The main loop's hard-stale path resolves a position at 0.50. This is not a verified market settlement or executable exit. Keep stale positions unresolved until authoritative resolution, or record a separate conservative mark-to-market estimate that is excluded from realized P&L and learner training.
+### 2. Stale positions — no longer booked as realized P&L
+This branch removes midpoint and arbitrary 0.50 stale exits. Stale positions remain open until authoritative market resolution. The trade-off is that a market that never resolves or cannot be found can occupy a position slot indefinitely; add a separate unresolved-position alert/reconciliation workflow rather than fabricating a close.
 
 ### 3. The probability model is heuristic, not calibrated
 The ensemble sets estimated probability by adding a hand-tuned signal lift to the current ask. This is not a calibrated forecast. Do not use this probability for Kelly sizing until it is validated out-of-sample with reliability curves, Brier score, log loss, and calibration by asset, time-to-expiry, and regime.
