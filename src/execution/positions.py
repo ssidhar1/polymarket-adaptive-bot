@@ -50,9 +50,10 @@ class PositionTracker:
         slug: str = "",
         end_date: str = None,
         meta: Optional[Dict[str, Any]] = None,
+        opened_at: Optional[datetime] = None,
     ):
         meta = meta or {}
-        opened = datetime.now(timezone.utc)
+        opened = opened_at or datetime.now(timezone.utc)
         pos = OpenPosition(
             order_id=order["order_id"],
             market_id=order.get("market_id", ""),
