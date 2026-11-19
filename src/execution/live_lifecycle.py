@@ -177,6 +177,7 @@ class LiveLifecycle:
         price = _decimal(_field(trade, "price"), "trade price")
         size = _decimal(_field(trade, "size"), "trade size")
         fee_bps = _field(trade, "fee_rate_bps")
+        fee_amount = explicit_fee_usdc(trade)
         matched_at = _iso(_field(trade, "matched_at"))
         maker_orders = _field(trade, "maker_orders", ()) or ()
         matched_order = intents_by_id.get(order_id)
@@ -217,18 +218,20 @@ class LiveLifecycle:
             "id": trade_id, "order_id": order_id, "asset_id": asset_id,
             "side": side, "price": str(price), "size": str(size),
             "fee_rate_bps": str(fee_bps) if fee_bps is not None else None,
+            "fee_amount_usdc": str(fee_amount) if fee_amount is not None else None,
             "matched_at": matched_at,
         }, sort_keys=True)
         with self.executor._db() as db:
             cur = db.execute(
-                "INSERT OR IGNORE INTO live_fills(trade_id,order_id,asset_id,side,price,size,fee_rate_bps,matched_at,raw_json) VALUES(?,?,?,?,?,?,?,?,?)",
+                "INSERT OR IGNORE INTO live_fills(trade_id,order_id,asset_id,side,price,size,fee_rate_bps,matched_at,raw_json,fee_amount_usdc) VALUES(?,?,?,?,?,?,?,?,?,?)",
                 (trade_id, order_id, asset_id, side, str(price), str(size),
-                 str(fee_bps) if fee_bps is not None else None, matched_at, raw),
+                 str(fee_bps) if fee_bps is not None else None, matched_at, raw,
+                 str(fee_amount) if fee_amount is not None else None),
             )
             if cur.rowcount == 0:
                 return False
-            # Fill rows are an immutable audit trail. Fees are retained as
-            # exchange-reported bps; do not invent a fee formula/net P&L here.
+            # Fill rows are an immutable audit trail. Explicit fee amounts are
+            # stored only when supplied; fee-rate bps are never converted to dollars.
             # Filled quantity is derived from the exchange's current open-order
             # matched size, or from deduplicated trade rows once the order is
             # terminal. Never add trade totals to a matched-size snapshot.
