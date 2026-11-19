@@ -24,6 +24,9 @@ from src.risk.manager import RiskManager
 from src.learning.adaptive import AdaptiveLearner
 from src.execution.paper import PaperExecutor
 from src.execution.positions import PositionTracker
+from src.execution.exit_policy import evaluate_exit
+from src.execution.paper_exit_lifecycle import PaperExitLifecycle
+from src.utils.fees import taker_fee_rate
 
 load_dotenv()
 logger = setup_logging(os.getenv("LOG_LEVEL", "INFO"))
@@ -117,6 +120,53 @@ def _can_open_for_market(risk, tracker, size: float, open_count: int, asset: str
     )
 
 
+
+def _sync_paper_ledger(tracker: PositionTracker, ledger: PaperExitLifecycle):
+    """Make tracker state agree with the durable partial-fill event journal."""
+    for pos in list(tracker.get_open_list()):
+        durable = ledger.get_position(pos.order_id)
+        metadata = {
+            "asset": pos.asset, "window": pos.window, "hour_utc": pos.hour_utc,
+            "weekday_utc": pos.weekday_utc, "time_remaining_s": pos.time_remaining_s,
+            "time_remaining_pct": pos.time_remaining_pct, "score": pos.score,
+            "edge_after_fees": pos.edge_after_fees, "momentum": pos.momentum,
+            "vs_open": pos.vs_open, "regime": pos.regime, "trade_type": pos.trade_type,
+            "slug": pos.slug, "end_date": pos.end_date,
+        }
+        if durable is None:
+            ledger.record_entry_fill(
+                position_id=pos.order_id, token_id=pos.token_id, market_id=pos.market_id,
+                direction=pos.direction, quantity=pos.shares, price=pos.entry_price,
+                fee_usd=pos.fee, opened_at=pos.opened_at.isoformat(),
+                metadata=metadata, event_id=f"entry:{pos.order_id}",
+            )
+            continue
+        pos.shares = durable["remaining_quantity"]
+        pos.entry_price = durable["average_entry_price"]
+        pos.fee = max(0.0, durable["entry_fees_usd"] - durable["allocated_entry_fees_usd"])
+        pos.size_usd = pos.shares * pos.entry_price
+        if pos.shares <= 1e-9:
+            tracker.open.pop(pos.order_id, None)
+
+    for durable in ledger.open_positions():
+        if durable["position_id"] in tracker.open:
+            continue
+        meta = durable["metadata"]
+        opened = datetime.fromisoformat(durable["opened_at"].replace("Z", "+00:00"))
+        remaining = durable["remaining_quantity"]
+        avg = durable["average_entry_price"]
+        entry_fee_remaining = max(0.0, durable["entry_fees_usd"] - durable["allocated_entry_fees_usd"])
+        row = {
+            "order_id": durable["position_id"], "market_id": durable["market_id"],
+            "token_id": durable["token_id"], "direction": durable["direction"],
+            "side": "buy", "entry_price": avg, "size_usd": remaining * avg,
+            "shares": remaining, "fee": entry_fee_remaining, "opened_at": opened.isoformat(),
+            "slug": meta.get("slug", ""), "end_date": meta.get("end_date"),
+            **{k: v for k, v in meta.items() if k not in ("slug", "end_date")},
+        }
+        tracker.import_open([row])
+
+
 def run_paper(config: dict):
     global _shutdown
     os_signal.signal(os_signal.SIGINT, _handle_signal)
@@ -181,6 +231,8 @@ def run_paper(config: dict):
             logger.warning(f"Open position restore failed: {e}")
 
     trade_log = TradeLogger(path=_data_dir() / "trades.db")
+    paper_lifecycle = PaperExitLifecycle(_data_dir() / "paper_lifecycle.db")
+    _sync_paper_ledger(tracker, paper_lifecycle)
 
     assets = config.get("markets", {}).get("targets", ["btc", "eth"]) or ["btc", "eth"]
     cycle = max(5, int(config.get("execution", {}).get("cycle_seconds", 10) or 10))
@@ -277,6 +329,82 @@ def run_paper(config: dict):
                                     f"win={trade.get('window')} t_left={trade.get('time_remaining_s', 0):.0f}s"
                                 )
                             continue
+
+                    # Paper-only TP/SL/time exits. Use a real bid and fresh
+                    # timestamp; never use midpoint as executable sell evidence.
+                    exit_cfg = config.get("exit_policy", {}) or {}
+                    if bool(exit_cfg.get("enabled", False)):
+                        try:
+                            durable = paper_lifecycle.get_position(pos.order_id)
+                            if durable and durable["is_open"]:
+                                pos.shares = durable["remaining_quantity"]
+                                pos.entry_price = durable["average_entry_price"]
+                                pos.fee = max(0.0, durable["entry_fees_usd"] - durable["allocated_entry_fees_usd"])
+                                pos.size_usd = pos.shares * pos.entry_price
+                                book = data.get_order_book(pos.token_id)
+                                bids = book.get("bids") or []
+                                top = bids[0] if bids else None
+                                if isinstance(top, dict):
+                                    bid = float(top.get("price") or 0)
+                                    bid_size = float(top.get("size") or 0)
+                                elif isinstance(top, (list, tuple)) and len(top) >= 2:
+                                    bid, bid_size = float(top[0]), float(top[1])
+                                else:
+                                    bid, bid_size = 0.0, 0.0
+                                fetched = float(book.get("fetched_at") or 0)
+                                book_time = datetime.fromtimestamp(fetched, timezone.utc) if fetched > 0 else None
+                                decision = evaluate_exit(
+                                    enabled=True, entry_price=pos.entry_price, shares=pos.shares,
+                                    opened_at=pos.opened_at, best_bid=bid, book_timestamp=book_time,
+                                    take_profit_pct=exit_cfg.get("take_profit_pct", 0.20),
+                                    stop_loss_pct=exit_cfg.get("stop_loss_pct", 0.15),
+                                    max_hold_seconds=exit_cfg.get("max_hold_seconds", 180),
+                                    max_book_age_seconds=exit_cfg.get("max_book_age_seconds", 3),
+                                )
+                                if decision.should_exit and bid_size > 0:
+                                    fraction = min(1.0, max(0.01, float(exit_cfg.get("fill_fraction", 0.50))))
+                                    qty = min(pos.shares * fraction, bid_size)
+                                    slip_bps = max(0.0, float(exit_cfg.get("slippage_bps", paper_slippage)))
+                                    exit_px = bid - bid * slip_bps / 10000.0
+                                    if qty * exit_px >= 0.50 and 0 < exit_px < 1:
+                                        exit_fee = qty * exit_px * taker_fee_rate(exit_px, rate=fee_rate)
+                                        prior_exit_qty = durable["exit_quantity"]
+                                        event_id = f"sell:{pos.order_id}:{prior_exit_qty + qty:.12f}"
+                                        updated = paper_lifecycle.record_exit_fill(
+                                            position_id=pos.order_id, event_id=event_id,
+                                            quantity=qty, price=exit_px, fee_usd=exit_fee,
+                                        )
+                                        trade = tracker.partial_close(
+                                            pos.order_id, qty, exit_px, exit_fee,
+                                            decision.reason, event_id,
+                                        )
+                                        if trade:
+                                            risk.record_pnl(trade["pnl"])
+                                            learner.log_trade({
+                                                "score": trade.get("score", 0.7),
+                                                "direction": trade["direction"],
+                                                "entry_price": trade["entry_price"],
+                                                "pnl": trade["pnl"], "size_usd": trade["size_usd"],
+                                                "stale": False, "hour_utc": trade.get("hour_utc"),
+                                                "time_remaining_s": trade.get("time_remaining_s"),
+                                                "vs_open": trade.get("vs_open"), "momentum": trade.get("momentum"),
+                                            })
+                                            trade_log.log(trade, score=trade.get("score", 0))
+                                            _save_state(state, risk, learner, tracker)
+                                            session_pnl += float(trade["pnl"])
+                                            logger.info(
+                                                "PAPER EXIT | %s | qty=%.5f @ %.4f | fee=$%.4f | "
+                                                "gross=$%.4f net=$%.4f remaining=%.5f",
+                                                decision.reason, qty, exit_px, exit_fee,
+                                                trade["gross_pnl"], trade["pnl"], updated["remaining_quantity"],
+                                            )
+                                            if not updated["is_open"]:
+                                                session_resolves += 1
+                                                if float(trade["pnl"]) > 0:
+                                                    session_wins += 1
+                                            continue
+                        except Exception as exit_error:
+                            logger.warning("Paper exit evaluation failed for %s: %s", pos.order_id, exit_error)
 
                     stage = tracker.stale_stage(
                         pos,
@@ -517,6 +645,15 @@ def run_paper(config: dict):
                             order, direction=direction, slug=slug,
                             end_date=m.get("endDate") or m.get("end_date_iso"),
                             meta=meta,
+                        )
+                        tracked = tracker.open[order["order_id"]]
+                        paper_lifecycle.record_entry_fill(
+                            position_id=order["order_id"], token_id=token,
+                            market_id=mid_id, direction=direction, quantity=order["shares"],
+                            price=order["fill_price"], fee_usd=order["fee"],
+                            opened_at=tracked.opened_at.isoformat(),
+                            metadata={**meta, "slug": slug, "end_date": m.get("endDate") or m.get("end_date_iso")},
+                            event_id=f"entry:{order['order_id']}",
                         )
                         _save_state(state, risk, learner, tracker)
                         open_n += 1
