@@ -53,7 +53,10 @@ def evaluate_exit(*, enabled: bool, entry_price, shares, opened_at,
     age = (now.astimezone(timezone.utc) - book_timestamp.astimezone(timezone.utc)).total_seconds()
     if age < -1 or age > max(0.0, float(max_book_age_seconds)):
         return ExitDecision(False, "stale_or_clock_skewed_book")
-    bid = _d(best_bid, "best_bid")
+    try:
+        bid = _d(best_bid, "best_bid")
+    except ValueError:
+        return ExitDecision(False, "invalid_executable_bid")
     if not (Decimal("0") < bid < Decimal("1")):
         return ExitDecision(False, "invalid_executable_bid")
     held = (now.astimezone(timezone.utc) - opened_at.astimezone(timezone.utc)).total_seconds()
