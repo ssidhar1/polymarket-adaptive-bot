@@ -36,3 +36,24 @@ Paper first. Live locked until expectancy is clear.
 Experimental. You can lose money.
 
 MIT
+
+
+## Live execution status (dormant)
+
+A separately tested live adapter exists in `src/execution/live.py`, using the official
+`polymarket-client` Python SDK. It is **not connected to the ASTF signal loop**.
+The Dockerfile and `main.py` continue to run/refuse anything except paper mode.
+
+The adapter currently supports only an explicitly approved, passive BUY limit order.
+It requires all of the following: `live_execution.enabled: true`,
+`ASTF_ENABLE_LIVE_TRADING=YES`, `ASTF_LIVE_CONFIRMATION=I_ACCEPT_REAL_MONEY_RISK`,
+`DEFAULT_MODE=live`, a per-order `SUBMIT_ONE_LIVE_ORDER` approval, an explicit EOA
+wallet matching the private key, a fresh uncrossed book, existing balance and allowance,
+and configured order/exposure limits. It does not submit approvals. A timed-out submit
+is marked `UNKNOWN` and cannot be retried under the same intent key.
+
+This is a guarded adapter, **not authorization to trade** and not a claim of production
+readiness. Before wiring it into the strategy, implement and test exchange-state
+reconciliation, partial-fill accounting, cancellation and expiry handling, position
+exits/settlement, crash recovery, rate-limit handling, and end-to-end testnet or
+mock-server scenarios. No live order is submitted by the current application.
