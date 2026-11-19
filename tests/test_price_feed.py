@@ -16,7 +16,7 @@ def test_price_feed_backoff_prevents_repeated_requests(monkeypatch):
     assert feed.get_prices() == {"btc": 50000.0, "eth": 3000.0}
     assert len(calls) == 2
 
-    clock["now"] = 107.0
+    clock["now"] = 116.0
     values["ETHUSDT"] = None
     assert feed.get_prices() == {"btc": 50000.0}
     assert feed._fail_count == 1
