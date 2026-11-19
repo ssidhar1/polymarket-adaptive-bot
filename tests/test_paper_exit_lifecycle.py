@@ -62,3 +62,41 @@ def test_summary_reports_realized_net_paper_pnl_and_fees(tmp_path):
     assert summary["gross_realized_pnl_usd"] == pytest.approx(1)
     assert summary["fees_usd"] == pytest.approx(.09)
     assert summary["net_realized_pnl_usd"] == pytest.approx(.91)
+
+
+def test_authoritative_resolution_closes_ledger_after_partial_exit(tmp_path):
+    ledger = PaperExitLifecycle(tmp_path / "paper.db")
+    ledger.record_entry_fill(position_id="p", token_id="t", market_id="m",
+        direction="up", quantity=10, price=.40, fee_usd=.04, event_id="b1")
+    ledger.record_exit_fill(position_id="p", event_id="s1",
+        quantity=4, price=.50, fee_usd=.02)
+    settled = ledger.record_settlement(position_id="p", event_id="settle:p",
+        resolution_price=1.0)
+    assert settled["remaining_quantity"] == 0
+    assert settled["is_open"] is False
+    assert settled["exit_quantity"] == pytest.approx(10)
+    assert settled["realized_gross_pnl_usd"] == pytest.approx(3.0)
+    assert settled["realized_net_pnl_usd"] == pytest.approx(2.924)
+    assert ledger.open_positions() == []
+    assert ledger.record_settlement(position_id="p", event_id="settle:p",
+        resolution_price=1.0)["is_open"] is False
+
+
+def test_paper_lifecycle_sync_restores_partial_position_after_restart(tmp_path):
+    from src.execution.positions import PositionTracker
+    from src.main import _sync_paper_ledger
+
+    ledger = PaperExitLifecycle(tmp_path / "paper.db")
+    ledger.record_entry_fill(position_id="p", token_id="t", market_id="m",
+        direction="up", quantity=10, price=.40, fee_usd=.04,
+        opened_at=datetime.now(timezone.utc).isoformat(),
+        metadata={"asset": "btc", "window": "5m"}, event_id="b1")
+    ledger.record_exit_fill(position_id="p", event_id="s1",
+        quantity=4, price=.50, fee_usd=.02)
+
+    restarted = PositionTracker()
+    _sync_paper_ledger(restarted, ledger)
+    restored = restarted.open["p"]
+    assert restored.shares == pytest.approx(6)
+    assert restored.entry_price == pytest.approx(.40)
+    assert restored.fee == pytest.approx(.024)
