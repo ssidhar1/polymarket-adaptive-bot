@@ -14,6 +14,7 @@ from decimal import Decimal, InvalidOperation
 from email.utils import parsedate_to_datetime
 from typing import Callable
 
+from src.execution.fee_accounting import explicit_fee_usdc, fee_coverage
 from src.execution.live import (
     DuplicateLiveIntent,
     LiveExecutionDisabled,
@@ -85,7 +86,10 @@ class LiveLifecycle:
             db.execute("""CREATE TABLE IF NOT EXISTS live_fills (
                 trade_id TEXT PRIMARY KEY, order_id TEXT NOT NULL, asset_id TEXT NOT NULL,
                 side TEXT NOT NULL, price TEXT NOT NULL, size TEXT NOT NULL,
-                fee_rate_bps TEXT, matched_at TEXT, raw_json TEXT NOT NULL)""")
+                fee_rate_bps TEXT, fee_amount_usdc TEXT, matched_at TEXT, raw_json TEXT NOT NULL)""")
+            fill_cols = {r[1] for r in db.execute("PRAGMA table_info(live_fills)")}
+            if "fee_amount_usdc" not in fill_cols:
+                db.execute("ALTER TABLE live_fills ADD COLUMN fee_amount_usdc TEXT")
             db.execute("""CREATE TABLE IF NOT EXISTS live_position_snapshots (
                 asset_id TEXT PRIMARY KEY, condition_id TEXT, shares TEXT NOT NULL,
                 avg_price TEXT NOT NULL, cost_usdc TEXT NOT NULL, current_value TEXT NOT NULL,
@@ -156,6 +160,15 @@ class LiveLifecycle:
                 "SELECT * FROM live_order_intents WHERE status NOT IN ('REJECTED','CANCELED','EXPIRED')"
             ).fetchall()]
 
+    def fee_coverage(self) -> dict:
+        """Report explicit-fee coverage; this is not a realized net-P&L report."""
+        with self.executor._db() as db:
+            db.row_factory = __import__("sqlite3").Row
+            rows = [dict(r) for r in db.execute(
+                "SELECT fee_amount_usdc FROM live_fills ORDER BY matched_at, trade_id"
+            ).fetchall()]
+        return fee_coverage(rows)
+
     def _record_trade(self, trade, intents_by_id, unmatched_intents=()):
         trade_id = str(_field(trade, "id", "") or "")
         if not trade_id:
@@ -166,6 +179,7 @@ class LiveLifecycle:
         price = _decimal(_field(trade, "price"), "trade price")
         size = _decimal(_field(trade, "size"), "trade size")
         fee_bps = _field(trade, "fee_rate_bps")
+        fee_amount = explicit_fee_usdc(trade)
         matched_at = _iso(_field(trade, "matched_at"))
         maker_orders = _field(trade, "maker_orders", ()) or ()
         matched_order = intents_by_id.get(order_id)
@@ -206,18 +220,20 @@ class LiveLifecycle:
             "id": trade_id, "order_id": order_id, "asset_id": asset_id,
             "side": side, "price": str(price), "size": str(size),
             "fee_rate_bps": str(fee_bps) if fee_bps is not None else None,
+            "fee_amount_usdc": str(fee_amount) if fee_amount is not None else None,
             "matched_at": matched_at,
         }, sort_keys=True)
         with self.executor._db() as db:
             cur = db.execute(
-                "INSERT OR IGNORE INTO live_fills(trade_id,order_id,asset_id,side,price,size,fee_rate_bps,matched_at,raw_json) VALUES(?,?,?,?,?,?,?,?,?)",
+                "INSERT OR IGNORE INTO live_fills(trade_id,order_id,asset_id,side,price,size,fee_rate_bps,matched_at,raw_json,fee_amount_usdc) VALUES(?,?,?,?,?,?,?,?,?,?)",
                 (trade_id, order_id, asset_id, side, str(price), str(size),
-                 str(fee_bps) if fee_bps is not None else None, matched_at, raw),
+                 str(fee_bps) if fee_bps is not None else None, matched_at, raw,
+                 str(fee_amount) if fee_amount is not None else None),
             )
             if cur.rowcount == 0:
                 return False
-            # Fill rows are an immutable audit trail. Fees are retained as
-            # exchange-reported bps; do not invent a fee formula/net P&L here.
+            # Fill rows are an immutable audit trail. Explicit fee amounts are
+            # stored only when supplied; fee-rate bps are never converted to dollars.
             # Filled quantity is derived from the exchange's current open-order
             # matched size, or from deduplicated trade rows once the order is
             # terminal. Never add trade totals to a matched-size snapshot.
