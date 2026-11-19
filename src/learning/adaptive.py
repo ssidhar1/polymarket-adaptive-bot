@@ -158,6 +158,7 @@ class AdaptiveLearner:
             key=lambda item: -item[1][1],
         )[:80]
         return {
+            "learning_state_version": 2,
             "min_score": self.current_min_score,
             "regime": self.regime,
             "trade_count": len(self.trade_log),
@@ -173,7 +174,9 @@ class AdaptiveLearner:
             self.regime = data["regime"]
 
         restored = 0
-        raw_buckets = data.get("buckets", {})
+        # Version 1 buckets stored raw USD P&L; never mix them with the
+        # version 2 size-normalized returns used by the current learner.
+        raw_buckets = data.get("buckets", {}) if data.get("learning_state_version") == 2 else {}
         if isinstance(raw_buckets, dict):
             for raw_key, raw_value in raw_buckets.items():
                 try:
