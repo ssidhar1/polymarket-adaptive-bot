@@ -14,7 +14,8 @@ from decimal import Decimal, InvalidOperation
 from email.utils import parsedate_to_datetime
 from typing import Callable
 
-from src.execution.fee_accounting import explicit_fee_usdc, fee_coverage\nfrom src.execution.live import (
+from src.execution.fee_accounting import explicit_fee_usdc, fee_coverage
+from src.execution.live import (
     DuplicateLiveIntent,
     LiveExecutionDisabled,
     LiveExecutionError,
