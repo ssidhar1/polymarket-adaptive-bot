@@ -47,6 +47,23 @@ execution:
   stale_grace_seconds: 260
   stale_max_hold_minutes: 30
 
+# Unified strategy sleeves. These settings are research defaults only;
+# the allocator is not wired into the live strategy loop yet.
+strategy_portfolio:
+  enabled: false
+  starting_bankroll: 1000.0
+  reserve_cash_pct: 0.20
+  max_strategy_pct: 0.25
+  max_position_pct: 0.04
+  compound_only_settled_net_pnl: true
+  weights:
+    astf_intraday: 0.35
+    weekly_price_ranges: 0.25
+    near_resolution: 0.15
+    weather_station: 0.10
+    cross_market_arb: 0.10
+    information_latency: 0.05
+
 # Paper-only automatic exits. This never submits exchange orders.
 exit_policy:
   enabled: true
