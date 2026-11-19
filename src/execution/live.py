@@ -92,6 +92,9 @@ class LiveExecutor:
                 intent_key TEXT PRIMARY KEY, status TEXT NOT NULL, asset_id TEXT NOT NULL,
                 side TEXT NOT NULL, price TEXT NOT NULL, size TEXT NOT NULL, order_id TEXT,
                 response_json TEXT, created_at TEXT NOT NULL, updated_at TEXT NOT NULL)""")
+            columns = {row[1] for row in db.execute("PRAGMA table_info(live_order_intents)")}
+            if "expires_at" not in columns:
+                db.execute("ALTER TABLE live_order_intents ADD COLUMN expires_at TEXT")
 
     def _reserve(self, key, asset, price, size):
         now = datetime.now(timezone.utc).isoformat()
