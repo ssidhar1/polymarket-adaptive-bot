@@ -23,7 +23,8 @@ def test_price_feed_backoff_prevents_repeated_requests(monkeypatch):
     assert feed.health()["retry_in_seconds"] == 2.0
     calls_after_failure = len(calls)
 
-    clock["now"] = 108.0
+    feed.last_fetch = 0.0
+    clock["now"] = 117.0
     assert feed.get_prices() == {"btc": 50000.0}
     assert len(calls) == calls_after_failure
 
