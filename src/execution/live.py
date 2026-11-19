@@ -151,7 +151,19 @@ class LiveExecutor:
                 matched = _decimal(_field(order, "size_matched", 0), "matched size")
                 opx = _decimal(_field(order, "price", 0), "open price")
                 reserved += max(Decimal("0"), original - matched) * opx
-        if reserved + notional > bankroll * max_total_pct: raise LiveExecutionError("Portfolio exposure cap exceeded")
+        # Include already-held positions, not just resting orders. A full first
+        # page is treated as incomplete data and therefore blocks new exposure.
+        position_page = self.client.list_positions(status="OPEN").first_page()
+        positions = list(_field(position_page, "items", ()) or ())
+        if len(positions) >= 100:
+            raise LiveExecutionError("Position page may be truncated; refusing new exposure")
+        held = Decimal("0")
+        for position in positions:
+            current_value = _decimal(_field(position, "current_value", 0), "position value")
+            cost_basis = _decimal(_field(position, "total_cost_usdc", 0), "position cost")
+            held += max(current_value, cost_basis)
+        if reserved + held + notional > bankroll * max_total_pct:
+            raise LiveExecutionError("Portfolio exposure cap exceeded")
 
         bal = self.client.get_balance_allowance(asset_type="COLLATERAL")
         available = _decimal(_field(bal, "balance", 0), "collateral balance") / USDC_BASE_UNITS
