@@ -406,8 +406,11 @@ class LiveLifecycle:
         """
         if approval != PER_ORDER_APPROVAL:
             raise LiveExecutionDisabled("Per-order approval token is required for exit")
+        # Refresh open orders, fills and wallet holdings on every exit request;
+        # never trust a stale in-memory position snapshot for a sell.
+        self.reconcile()
         if not self.last_reconcile_ok:
-            raise LiveExecutionError("Reconcile wallet positions immediately before exit")
+            raise LiveExecutionError("Wallet reconciliation failed; refusing exit")
         position = self.positions.get(str(asset_id))
         if not position:
             raise LiveExecutionError("No reconciled open position for this asset")
