@@ -41,8 +41,9 @@ _shutdown = False
 
 
 def _handle_signal(signum, frame):
+    # Signal handlers must do as little as possible: Rich/console logging can
+    # re-enter imports while Python is interrupted by SIGTERM.
     global _shutdown
-    logger.info(f"Shutdown signal received ({signum}) — finishing cycle...")
     _shutdown = True
 
 
@@ -600,6 +601,7 @@ def run_paper(config: dict):
         if not _shutdown:
             time.sleep(cycle)
 
+    logger.info("Shutdown signal received; finishing cycle and persisting state.")
     _save_state(state, risk, learner, tracker)
     wr = (session_wins / session_resolves) if session_resolves else 0.0
     delta = risk.bankroll - session_start_bank
