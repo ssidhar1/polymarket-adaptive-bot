@@ -319,9 +319,8 @@ class LiveLifecycle:
                     # A complete account-trade history covering the order's
                     # full original quantity proves it is filled. Otherwise
                     # absence alone does not prove cancellation or expiry.
-                    fill_sum = db.execute("SELECT COALESCE(SUM(CAST(size AS REAL)),0) FROM live_fills WHERE order_id=?",
-                                          (oid,)).fetchone()[0]
-                    filled = _decimal(fill_sum, "deduplicated fill quantity")
+                    fill_rows = db.execute("SELECT size FROM live_fills WHERE order_id=?", (oid,)).fetchall()
+                    filled = sum((_decimal(x[0], "deduplicated fill quantity") for x in fill_rows), Decimal("0"))
                     original = _decimal(row.get("size", "0"), "original order quantity")
                     if original > 0 and filled >= original:
                         status, reason = "FILLED", "Account trade fills cover the original order quantity"
