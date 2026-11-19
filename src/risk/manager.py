@@ -1,5 +1,5 @@
 """
-Risk Manager — aggressive compounding when edge is real.
+Risk manager with hard portfolio exposure limits and conservative sizing.
 """
 from typing import Optional
 import logging
@@ -16,11 +16,13 @@ def _utc_today():
 def _finite(x, default: float = 0.0) -> float:
     try:
         v = float(x)
-        if math.isnan(v) or math.isinf(v):
-            return default
-        return v
+        return v if math.isfinite(v) else default
     except (TypeError, ValueError):
         return default
+
+
+def _pct(config: dict, key: str, default: float, low: float = 0.001, high: float = 0.90) -> float:
+    return max(low, min(high, _finite(config.get(key, default), default)))
 
 
 class RiskManager:
@@ -49,10 +51,7 @@ class RiskManager:
 
     def update_bankroll(self, new_value: float):
         self.bankroll = max(0.0, _finite(new_value, self.bankroll))
-        if self.bankroll > self.peak_bankroll:
-            self.peak_bankroll = self.bankroll
-        if self.peak_bankroll < self.bankroll:
-            self.peak_bankroll = self.bankroll
+        self.peak_bankroll = max(self.peak_bankroll, self.bankroll)
         today = _utc_today()
         if today != self.current_day:
             self.daily_pnl = 0.0
@@ -70,8 +69,8 @@ class RiskManager:
             return
         dd = (self.peak_bankroll - self.bankroll) / self.peak_bankroll
         daily_loss_pct = -self.daily_pnl / self.peak_bankroll if self.daily_pnl < 0 else 0.0
-        max_dd = max(0.01, min(0.90, _finite(self.config.get("max_drawdown_pct", 0.15), 0.15)))
-        daily_lim = max(0.01, min(0.90, _finite(self.config.get("daily_loss_limit_pct", 0.08), 0.08)))
+        max_dd = _pct(self.config, "max_drawdown_pct", 0.12, 0.01, 0.90)
+        daily_lim = _pct(self.config, "daily_loss_limit_pct", 0.05, 0.01, 0.90)
         if dd >= max_dd:
             self.paused = True
             self.pause_reason = f"Max drawdown hit: {dd:.1%}"
@@ -85,16 +84,34 @@ class RiskManager:
                 logger.warning(f"{self.pause_reason} | daily_pnl=${self.daily_pnl:.2f}")
                 self._pause_logged = True
 
-    def can_open(self, size_usd: float, open_count: int = 0) -> bool:
+    def can_open(
+        self,
+        size_usd: float,
+        open_count: int = 0,
+        reserved_exposure: float = 0.0,
+        asset_exposure: float = 0.0,
+        window_exposure: float = 0.0,
+    ) -> bool:
         if self.paused:
             return False
-        if open_count >= int(self.config.get("max_concurrent", 5) or 5):
+        if open_count >= int(self.config.get("max_concurrent", 6) or 6):
             return False
-        size_usd = _finite(size_usd, 0.0)
-        if size_usd <= 0 or self.bankroll <= 0:
+        size = _finite(size_usd, 0.0)
+        if size <= 0 or self.bankroll <= 0:
             return False
-        max_pct = max(0.001, min(0.30, _finite(self.config.get("max_position_pct", 0.05), 0.05)))
-        return size_usd <= self.bankroll * max_pct + 1e-6
+        max_position = _pct(self.config, "max_position_pct", 0.04, 0.001, 0.30)
+        total_cap = _pct(self.config, "max_total_exposure_pct", 0.20, 0.01, 0.90)
+        asset_cap = _pct(self.config, "max_asset_exposure_pct", 0.14, 0.01, 0.90)
+        window_cap = _pct(self.config, "max_window_exposure_pct", 0.18, 0.01, 0.90)
+        if size > self.bankroll * max_position + 1e-6:
+            return False
+        if _finite(reserved_exposure) + size > self.bankroll * total_cap + 1e-6:
+            return False
+        if _finite(asset_exposure) + size > self.bankroll * asset_cap + 1e-6:
+            return False
+        if _finite(window_exposure) + size > self.bankroll * window_cap + 1e-6:
+            return False
+        return True
 
     def size_position(
         self,
@@ -105,43 +122,35 @@ class RiskManager:
         edge_after_fees: Optional[float] = None,
         regime: str = "normal",
     ) -> float:
-        max_pct = max(0.001, min(0.30, _finite(self.config.get("max_position_pct", 0.05), 0.05)))
+        max_pct = _pct(self.config, "max_position_pct", 0.04, 0.001, 0.30)
         base = self.bankroll * max_pct
         confidence = _finite(confidence, 0.5)
         price = _finite(price, 0.5)
 
         if is_exploration:
-            explor_pct = _finite(self.learning_cfg.get("exploration_pct", 0.025), 0.025)
+            explor_pct = _pct(self.learning_cfg, "exploration_pct", 0.02, 0.001, 0.10)
             remaining = max(0.0, self.bankroll * explor_pct - self.exploration_used_today)
-            return min(base * 0.3, remaining)
+            return min(base * 0.25, remaining)
 
-        if edge_after_fees is not None:
-            eaf = _finite(edge_after_fees, -1.0)
-            if eaf <= 0:
-                return 0.0
-        else:
-            eaf = 0.0
+        eaf = _finite(edge_after_fees, -1.0) if edge_after_fees is not None else -1.0
+        if eaf <= 0:
+            return 0.0
 
-        if est_prob is not None and 0.01 < price < 0.99:
-            ep = _finite(est_prob, 0.5)
-            edge = eaf if eaf > 0 else (ep - price)
+        # Kelly is disabled until a separately validated calibration model is
+        # explicitly enabled. The current ensemble probability is heuristic.
+        calibrated = bool(self.config.get("probability_model_calibrated", False))
+        if calibrated and est_prob is not None and 0.01 < price < 0.99:
+            ep = max(0.01, min(0.99, _finite(est_prob, 0.5)))
+            edge = ep - price
             if edge <= 0:
                 return 0.0
-            # More aggressive Kelly fraction in degen + favorable
-            frac = 0.28 if self.degen else 0.18
-            if regime == "favorable":
-                frac *= 1.35
-            elif regime == "chaotic":
-                frac *= 0.55
-            kelly = edge / max(1e-6, (1.0 - price))
-            kelly = max(0.0, min(kelly * frac, max_pct * 1.4))
-            size = self.bankroll * kelly
-            conf_scale = max(0.55, min(1.15, (confidence - 0.48) / 0.30))
-            size *= conf_scale
-            return max(0.0, min(base * 1.25, size))
+            kelly_fraction = max(0.0, min(edge / max(1e-6, 1.0 - price) * 0.10, max_pct))
+            return min(base, self.bankroll * kelly_fraction)
 
-        scale = max(0.0, min(1.0, (confidence - 0.52) / 0.32))
-        return base * scale if scale > 0 else 0.0
+        confidence_scale = max(0.0, min(1.0, (confidence - 0.52) / 0.32))
+        edge_scale = max(0.0, min(1.0, eaf / 0.05))
+        regime_scale = 0.65 if regime == "chaotic" else (1.0 if regime == "normal" else 1.05)
+        return base * confidence_scale * edge_scale * regime_scale
 
     def record_exploration(self, size: float):
         self.exploration_used_today += max(0.0, _finite(size, 0.0))

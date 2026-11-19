@@ -86,6 +86,11 @@ def _save_state(state: StateStore, risk: RiskManager, learner: AdaptiveLearner, 
         state.save({
             "bankroll": risk.bankroll,
             "peak_bankroll": risk.peak_bankroll,
+            "daily_pnl": risk.daily_pnl,
+            "risk_current_day": risk.current_day.isoformat(),
+            "risk_paused": risk.paused,
+            "risk_pause_reason": risk.pause_reason,
+            "exploration_used_today": risk.exploration_used_today,
             "learner": learner.export_state(),
             "open_count": tracker.open_count(),
             "open_positions": tracker.export_open(),
@@ -98,6 +103,17 @@ def _prune_cooldowns(cooldown_until: dict, now: float):
     dead = [k for k, t in cooldown_until.items() if t <= now]
     for k in dead:
         del cooldown_until[k]
+
+
+def _can_open_for_market(risk, tracker, size: float, open_count: int, asset: str, window: str) -> bool:
+    positions = tracker.get_open_list()
+    reserved = sum(float(p.size_usd) for p in positions)
+    asset_used = sum(float(p.size_usd) for p in positions if p.asset == asset)
+    window_used = sum(float(p.size_usd) for p in positions if p.window == window)
+    return risk.can_open(
+        size, open_count=open_count, reserved_exposure=reserved,
+        asset_exposure=asset_used, window_exposure=window_used,
+    )
 
 
 def run_paper(config: dict):
@@ -121,13 +137,24 @@ def run_paper(config: dict):
         start_bank = float(saved.get("bankroll", config.get("bankroll", 1000.0)))
 
     risk = RiskManager(config, start_bank)
+    # Restore intraday controls only for the same UTC date. Drawdown is
+    # independently recalculated from the persisted peak bankroll.
+    if saved.get("risk_current_day") == risk.current_day.isoformat():
+        try:
+            risk.daily_pnl = float(saved.get("daily_pnl", 0.0))
+            risk.exploration_used_today = max(0.0, float(saved.get("exploration_used_today", 0.0)))
+            if bool(saved.get("risk_paused")):
+                risk.paused = True
+                risk.pause_reason = str(saved.get("risk_pause_reason") or "Persisted risk pause")
+            risk._check_circuit_breakers()
+        except (TypeError, ValueError):
+            logger.warning("Could not restore intraday risk state; keeping conservative defaults")
     if saved.get("peak_bankroll") and not os.getenv("PAPER_RESET_BANKROLL"):
         try:
             risk.peak_bankroll = max(risk.bankroll, float(saved["peak_bankroll"]))
         except (TypeError, ValueError):
             pass
 
-    risk.clear_daily_pause("service restart")
 
     learner = AdaptiveLearner(config)
     learner.import_state(saved.get("learner") or {})
@@ -141,7 +168,10 @@ def run_paper(config: dict):
 
     fee_rate = float(config.get("signals", {}).get("fee_rate", 0.07))
     prefer_maker = bool(config.get("execution", {}).get("prefer_maker", True))
-    executor = PaperExecutor(fee_rate=fee_rate, prefer_maker=prefer_maker)
+    paper_slippage = float(config.get("execution", {}).get("paper_slippage_bps", 20))
+    executor = PaperExecutor(
+        fee_rate=fee_rate, prefer_maker=False, slippage_bps=paper_slippage
+    )
     tracker = PositionTracker()
     if saved.get("open_positions") and not os.getenv("PAPER_RESET_BANKROLL"):
         try:
@@ -181,6 +211,7 @@ def run_paper(config: dict):
             risk.update_bankroll(risk.bankroll)
 
             if risk.paused:
+                _save_state(state, risk, learner, tracker)
                 now_t = time.time()
                 if now_t - last_pause_log > 600:
                     logger.warning(
@@ -225,6 +256,7 @@ def run_paper(config: dict):
                                     "direction": trade["direction"],
                                     "entry_price": trade["entry_price"],
                                     "pnl": trade["pnl"],
+                                    "size_usd": trade.get("size_usd", 0.0),
                                     "stale": False,
                                     "hour_utc": trade.get("hour_utc"),
                                     "time_remaining_s": trade.get("time_remaining_s"),
@@ -232,6 +264,7 @@ def run_paper(config: dict):
                                     "momentum": trade.get("momentum"),
                                 })
                                 trade_log.log(trade, score=trade.get("score", 0))
+                                _save_state(state, risk, learner, tracker)
                                 session_resolves += 1
                                 session_pnl += float(trade["pnl"])
                                 if float(trade["pnl"]) > 0:
@@ -249,55 +282,13 @@ def run_paper(config: dict):
                         grace_seconds=int(config.get("execution", {}).get("stale_grace_seconds", 300)),
                         max_hold_minutes=int(config.get("execution", {}).get("stale_max_hold_minutes", 35)),
                     )
-                    if stage == "soft":
-                        mid_px = None
-                        try:
-                            mid_px = data.get_mid_price(pos.token_id)
-                        except Exception:
-                            mid_px = None
-                        if mid_px is not None and 0.02 < float(mid_px) < 0.98:
-                            trade = tracker.resolve(pos.order_id, float(mid_px))
-                            tag = f"mid={float(mid_px):.3f}"
-                        else:
-                            continue
-                        if trade:
-                            risk.record_pnl(trade["pnl"])
-                            learner.log_trade({
-                                "score": trade.get("score", 0.5),
-                                "direction": trade["direction"],
-                                "entry_price": trade["entry_price"],
-                                "pnl": trade["pnl"],
-                                "stale": True,
-                            })
-                            trade_log.log(trade, score=trade.get("score", 0))
-                            session_resolves += 1
-                            session_pnl += float(trade["pnl"])
-                            if float(trade["pnl"]) > 0:
-                                session_wins += 1
-                            logger.warning(
-                                f"STALE SOFT {pos.direction} @ {tag} | pnl=${trade['pnl']:.3f} | "
-                                f"h={trade.get('hour_utc')} win={trade.get('window')}"
-                            )
-                    elif stage == "hard":
-                        trade = tracker.resolve(pos.order_id, 0.5)
-                        if trade:
-                            risk.record_pnl(trade["pnl"])
-                            learner.log_trade({
-                                "score": trade.get("score", 0.5),
-                                "direction": trade["direction"],
-                                "entry_price": trade["entry_price"],
-                                "pnl": trade["pnl"],
-                                "stale": True,
-                            })
-                            trade_log.log(trade, score=trade.get("score", 0))
-                            session_resolves += 1
-                            session_pnl += float(trade["pnl"])
-                            if float(trade["pnl"]) > 0:
-                                session_wins += 1
-                            logger.warning(
-                                f"STALE HARD {pos.direction} @ 0.5 | pnl=${trade['pnl']:.3f} | "
-                                f"h={trade.get('hour_utc')} win={trade.get('window')}"
-                            )
+                    if stage in ("soft", "hard"):
+                        # A midpoint or arbitrary 0.50 mark is not an executable
+                        # exit or authoritative settlement. Keep the position open.
+                        logger.warning(
+                            f"STALE {stage.upper()} | retaining unresolved position "
+                            f"{pos.order_id}; awaiting authoritative market resolution"
+                        )
                 except Exception as e:
                     logger.warning(f"Resolve error for {getattr(pos, 'order_id', '?')}: {e}")
 
@@ -340,6 +331,10 @@ def run_paper(config: dict):
 
                         book_up = data.get_order_book(up_token)
                         book_down = data.get_order_book(down_token)
+                        max_book_age = float(config.get("execution", {}).get("max_book_age_seconds", 8))
+                        if any(time.time() - float(b.get("fetched_at", 0)) > max_book_age
+                               for b in (book_up, book_down)):
+                            continue
                         up_mid = book_up.get("mid")
                         down_mid = book_down.get("mid")
                         up_ask = book_up.get("best_ask") or best_ask(book_up)
@@ -355,15 +350,19 @@ def run_paper(config: dict):
                         mom = prices.momentum(asset, hist)
 
                         try:
-                            live_px = float((prices.cache or {}).get(asset) or 0)
-                            if live_px <= 0:
-                                live_px = float((prices.get_prices() or {}).get(asset) or 0)
+                            live_px = float(prices.get_fresh_price(asset, max_age=15.0) or 0)
                         except Exception:
                             live_px = 0.0
+                        if live_px <= 0:
+                            logger.debug(f"Skipping {slug}: spot price feed is stale")
+                            continue
                         if slug and live_px > 0 and slug not in window_open_px:
                             rem = float(m.get("_remaining_s") or 0)
                             win_s = float(m.get("_window_seconds") or 300)
-                            if rem <= win_s + 5:
+                            # Only accept a spot observation at the actual window
+                            # boundary; a mid-window restart must not relabel a
+                            # late price as the market's opening reference.
+                            if win_s - 5 <= rem <= win_s + 5:
                                 window_open_px[slug] = live_px
                         open_px = window_open_px.get(slug)
                         vs_open = 0.0
@@ -378,7 +377,7 @@ def run_paper(config: dict):
                             o_open = window_open_px.get(other_slugs[-1])
                             if o_open and o_open > 0:
                                 try:
-                                    o_live = float((prices.cache or {}).get(other_asset) or 0)
+                                    o_live = float(prices.get_fresh_price(other_asset, max_age=15.0) or 0)
                                     if o_live > 0:
                                         other_vs = max(-1.0, min(1.0, (o_live - o_open) / o_open * 150))
                                 except Exception:
@@ -415,57 +414,17 @@ def run_paper(config: dict):
                         feat_dn["other_vs_open"] = other_vs
                         feat_dn["window_lead"] = window_lead
 
-                        arb = ensemble.complete_set_arb(
+                        # Complete-set opportunities are monitored but not executed.
+                        # Two sequential legs are not atomic; a one-leg fill creates
+                        # unhedged directional exposure and can fake arbitrage profits.
+                        arb_watch = ensemble.complete_set_arb(
                             up_mid, down_mid, up_ask=up_ask, down_ask=down_ask
                         )
-                        if arb:
-                            budget = risk.size_position(
-                                arb["score"],
-                                edge_after_fees=arb.get("edge"),
-                                regime=regime,
+                        if arb_watch:
+                            logger.info(
+                                f"ARB WATCH (execution disabled) | estimated_edge={arb_watch['edge']:.3f} "
+                                f"| {slug[:40]}"
                             )
-                            up_px = float(arb["up_price"])
-                            dn_px = float(arb["down_price"])
-                            pair_cost = up_px + dn_px
-                            if budget > 0 and pair_cost > 0:
-                                n_shares = budget / pair_cost
-                                size_up = n_shares * up_px
-                                size_dn = n_shares * dn_px
-                                if (
-                                    risk.can_open(size_up, open_count=open_n)
-                                    and risk.can_open(size_dn, open_count=open_n + 1)
-                                ):
-                                    meta = _timing_meta(
-                                        m, feat_up, arb["score"], arb.get("edge") or 0,
-                                        mom, regime, "arb",
-                                    )
-                                    legs_ok = True
-                                    for side, token, price, sz in [
-                                        ("up", up_token, up_px, size_up),
-                                        ("down", down_token, dn_px, size_dn),
-                                    ]:
-                                        order = executor.place_order(
-                                            token, "buy", price, sz, mid_id,
-                                            already_aggressive=True,
-                                        )
-                                        if not order:
-                                            legs_ok = False
-                                            break
-                                        tracker.add(
-                                            order, direction=side, slug=slug,
-                                            end_date=m.get("endDate") or m.get("end_date_iso"),
-                                            meta=meta,
-                                        )
-                                        open_n += 1
-                                    if legs_ok:
-                                        cooldown_until[mid_id] = now + cooldown_sec
-                                        trades_this_cycle += 1
-                                        logger.info(
-                                            f"ARB SET | edge={arb['edge']:.3f} | "
-                                            f"shares≈{n_shares:.1f} | spend=${size_up+size_dn:.1f} | "
-                                            f"h={meta['hour_utc']} win={meta['window']} | {slug[:40]}"
-                                        )
-                                    continue
 
                         sig_up = ensemble.directional_score(feat_up, preferred_side="up")
                         sig_dn = ensemble.directional_score(feat_dn, preferred_side="down")
@@ -530,7 +489,7 @@ def run_paper(config: dict):
                             edge_after_fees=edge,
                             regime=regime,
                         )
-                        if size <= 0 or not risk.can_open(size, open_count=open_n):
+                        if size <= 0 or not _can_open_for_market(risk, tracker, size, open_n, asset, str(m.get("_window") or "")):
                             continue
 
                         # Regime-conditional pyramid (once per market)
@@ -539,7 +498,7 @@ def run_paper(config: dict):
                         if (regime == "favorable" and existing and len(existing) == 1
                             and cooldown_until.get(pyr_key, 0) <= now):
                             size = size * 0.50
-                            if not risk.can_open(size, open_count=open_n):
+                            if not _can_open_for_market(risk, tracker, size, open_n, asset, str(m.get("_window") or "")):
                                 continue
                             cooldown_until[pyr_key] = now + cooldown_sec * 2
 
@@ -548,7 +507,8 @@ def run_paper(config: dict):
                             m, feat, sig["score"], edge or 0, mom, regime, trade_type
                         )
                         order = executor.place_order(
-                            token, "buy", entry, size, mid_id, already_aggressive=True
+                            token, "buy", entry, size, mid_id, already_aggressive=True,
+                            fee_rate=float(feat.get("fee_rate") or fee_rate),
                         )
                         if not order:
                             continue
@@ -557,11 +517,13 @@ def run_paper(config: dict):
                             end_date=m.get("endDate") or m.get("end_date_iso"),
                             meta=meta,
                         )
+                        _save_state(state, risk, learner, tracker)
                         open_n += 1
                         trades_this_cycle += 1
                         cooldown_until[mid_id] = now + cooldown_sec
                         if is_expl:
                             risk.record_exploration(size)
+                        _save_state(state, risk, learner, tracker)
 
                         tag = "EXPL" if is_expl else "DIR"
                         logger.info(

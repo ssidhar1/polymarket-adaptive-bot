@@ -26,6 +26,8 @@ class PriceFeed:
         adapter = HTTPAdapter(max_retries=retry, pool_connections=8, pool_maxsize=8)
         self.session.mount("https://", adapter)
         self.cache: Dict[str, float] = {}
+        self.cache_updated_at: Dict[str, float] = {}
+        self.max_stale_seconds = 15.0
         self.last_fetch = 0.0
         self.cache_ttl = 6.0
         self._mtf_cache: Dict[str, tuple] = {}
@@ -74,13 +76,15 @@ class PriceFeed:
     def get_prices(self) -> Dict[str, float]:
         now = time.time()
         if now - self.last_fetch < self.cache_ttl and self.cache:
-            return dict(self.cache)
+            return {a: p for a, p in self.cache.items()
+                    if now - self.cache_updated_at.get(a, 0.0) <= self.max_stale_seconds}
 
         updated = False
         for asset, symbol in SYMBOLS.items():
             p = self._fetch_binance_price(symbol)
             if p is not None:
                 self.cache[asset] = p
+                self.cache_updated_at[asset] = now
                 updated = True
 
         if updated:
@@ -92,7 +96,16 @@ class PriceFeed:
                 logger.warning(
                     f"Binance price feed failing (n={self._fail_count}); using stale cache"
                 )
-        return dict(self.cache)
+        return {a: p for a, p in self.cache.items()
+                if now - self.cache_updated_at.get(a, 0.0) <= self.max_stale_seconds}
+
+    def get_fresh_price(self, asset: str, max_age: float = None) -> Optional[float]:
+        now = time.time()
+        limit = self.max_stale_seconds if max_age is None else max(0.0, float(max_age))
+        updated = self.cache_updated_at.get(asset, 0.0)
+        if not updated or now - updated > limit:
+            return None
+        return self.cache.get(asset)
 
     @staticmethod
     def _ret(prices: List[float], bars: int) -> float:

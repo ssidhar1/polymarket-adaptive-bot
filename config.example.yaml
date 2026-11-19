@@ -1,11 +1,15 @@
 bankroll: 1000.0
 
 risk:
-  max_position_pct: 0.06
+  max_position_pct: 0.04
   max_concurrent: 6
-  daily_loss_limit_pct: 0.09
-  max_drawdown_pct: 0.18
+  max_total_exposure_pct: 0.20
+  max_asset_exposure_pct: 0.14
+  max_window_exposure_pct: 0.18
+  daily_loss_limit_pct: 0.05
+  max_drawdown_pct: 0.12
   min_edge_after_fees: 0.015
+  probability_model_calibrated: false
 
 markets:
   targets:
@@ -25,7 +29,7 @@ signals:
   min_depth_usd: 12.0
   min_time_remaining_pct: 0.06
   max_time_remaining_pct: 0.99
-  max_prob_lift: 0.13
+  max_prob_lift: 0.04
 
 learning:
   calibration_window: 100
@@ -33,7 +37,9 @@ learning:
   exploration_pct: 0.02
 
 execution:
-  prefer_maker: true
+  prefer_maker: false
+  paper_slippage_bps: 20
+  max_book_age_seconds: 8
   max_slippage_bps: 30
   cycle_seconds: 7
   cooldown_seconds: 35
