@@ -195,11 +195,7 @@ class PaperExitLifecycle:
             settle = db.execute("""SELECT COALESCE(SUM(quantity),0) q,
                 COALESCE(SUM(gross_pnl_usd),0) gross,COALESCE(SUM(net_pnl_usd),0) net
                 FROM paper_settlement_events""").fetchone()
-            open_count = db.execute("""SELECT COUNT(*) FROM (
-                SELECT p.position_id,
-                COALESCE(SUM(CASE WHEN e.side='BUY' THEN e.quantity ELSE -e.quantity END),0) q
-                FROM paper_positions p LEFT JOIN paper_fill_events e ON p.position_id=e.position_id
-                GROUP BY p.position_id HAVING q > 0.000000001)""").fetchone()[0]
+        open_count = len(self.open_positions())
         return {"fill_events": int(row["fills"]), "entry_shares": float(row["bought"]),
                 "exit_shares": float(row["sold"])+float(settle["q"]), "open_positions": int(open_count),
                 "gross_realized_pnl_usd": float(row["gross_pnl"])+float(settle["gross"]),
