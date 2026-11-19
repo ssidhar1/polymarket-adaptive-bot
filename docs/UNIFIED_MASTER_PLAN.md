@@ -62,3 +62,10 @@ Paper mode only. The dormant live adapter remains disconnected and `run_live()` 
 - It applies a non-zero fee estimate (Gamma fee schedule when present; conservative configured fallback otherwise) and explicit slippage assumption. Missing fee metadata is flagged.
 - It deliberately emits `fair_probability=None` with `fair_value_unmodeled` and `resolution_rules_unverified` flags. It is a discovery feed, not a trade signal. It cannot be promoted into the paper executor until the probability model, exact resolution source, and event-time historical replay are validated.
 - The scanner is not yet registered in `src/main.py`; `strategy_portfolio.enabled` remains false.
+
+
+## Probability model and walk-forward evaluator (research scaffolding)
+- `src/strategies/weekly_probability.py` provides a lognormal bucket/threshold probability primitive. Spot, annualized volatility, horizon and optional drift are explicit inputs; the default zero-drift assumption is not calibrated and is not a trade signal.
+- `src/research/walk_forward.py` validates event-time forecast records, rejects forecasts timestamped at/after resolution, and scores chronological out-of-sample test windows with Brier score and per-share net P&L after supplied fees/slippage.
+- The evaluator does not fit or calibrate a model. A future strategy-specific trainer must use only data available before each test window, and forecasts must be persisted before outcomes are known. No historical dataset or performance claim is included in this commit.
+- Remaining blockers before weekly paper execution: authoritative resolution-rule parser/audit, event-time spot and volatility history, volatility calibration by horizon/regime, market-specific fee validation, durable forecast capture, and integration with shared risk + paper ledger.
