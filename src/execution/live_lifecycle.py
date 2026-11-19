@@ -202,6 +202,7 @@ class LiveLifecycle:
             filled = _decimal(old[0] if old else "0", "persisted filled size") + size
             db.execute("UPDATE live_order_intents SET filled_size=?,last_reconciled_at=? WHERE intent_key=?",
                        (str(filled), datetime.now(timezone.utc).isoformat(), matched_order["intent_key"]))
+            matched_order["filled_size"] = str(filled)
         return True
 
     def reconcile(self) -> dict:
@@ -291,10 +292,16 @@ class LiveLifecycle:
                     continue
                 open_order = self.open_orders.get(oid)
                 if open_order is None:
-                    # Absence from open orders alone does NOT prove filled,
-                    # canceled or expired. Preserve an explicit unresolved state.
-                    status = "NOT_OPEN_RECONCILE_REQUIRED"
-                    reason = "Absent from open-order listing; terminal reason not yet proven"
+                    # A complete account-trade history covering the order's
+                    # full original quantity proves it is filled. Otherwise
+                    # absence alone does not prove cancellation or expiry.
+                    filled = _decimal(row.get("filled_size", "0"), "filled quantity")
+                    original = _decimal(row.get("size", "0"), "original order quantity")
+                    if original > 0 and filled >= original:
+                        status, reason = "FILLED", "Account trade fills cover the original order quantity"
+                    else:
+                        status = "NOT_OPEN_RECONCILE_REQUIRED"
+                        reason = "Absent from open-order listing; terminal reason not yet proven"
                 else:
                     original = _decimal(_field(open_order, "original_size"), "original order size")
                     matched = _decimal(_field(open_order, "size_matched"), "matched order size")
