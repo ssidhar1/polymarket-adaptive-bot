@@ -22,10 +22,8 @@ class EnsembleSignal:
         self.min_time_remaining = float(sig.get("min_time_remaining_pct", 0.05))
         self.max_entry = float(sig.get("max_entry_price", 0.57))
         self.min_abs_momentum = float(sig.get("min_abs_momentum", 0.08))
-        self.max_prob_lift = float(sig.get("max_prob_lift", 0.14))
+        self.max_prob_lift = min(0.06, max(0.0, float(sig.get("max_prob_lift", 0.04))))
         self.degen = bool(sig.get("degen_mode", True))
-        self.prefer_maker = bool(config.get("execution", {}).get("prefer_maker", True))
-        self.maker_rebate = 0.20
         self.reject_counts: Dict[str, int] = {}
 
     def _reject(self, reason: str) -> Dict:
@@ -46,10 +44,8 @@ class EnsembleSignal:
         return out
 
     def _effective_fee(self, entry: float, fee_rate: float) -> float:
-        fee = taker_fee_rate(entry, rate=fee_rate)
-        if self.prefer_maker:
-            fee *= (1.0 - self.maker_rebate)
-        return fee
+        # Aggressive entries pay full taker fees; no assumed maker credit.
+        return taker_fee_rate(entry, rate=fee_rate)
 
     def complete_set_arb(self, up_mid, down_mid, up_ask=None, down_ask=None):
         up_px = up_ask if up_ask is not None else up_mid
@@ -81,6 +77,7 @@ class EnsembleSignal:
         other_vs_open = float(features.get("other_vs_open", 0.0) or 0.0)
         window_lead = float(features.get("window_lead", 0.0) or 0.0)  # 5m mid bias for 15m
         imb = float(features.get("book_imbalance", 0.0) or 0.0)
+        micro = float(features.get("microprice_delta", 0.0) or 0.0)
         remaining_s = float(features.get("time_remaining_s", 300) or 300)
         vol = features.get("volatility_regime", "normal")
         mid = features.get("mid_price")
@@ -135,7 +132,9 @@ class EnsembleSignal:
         if window_s >= 800 and abs(signed_lead) > 0.35:
             lead_boost = 0.12 * signed_lead * (1.15 if self.degen else 0.8)
 
-        total_drive = directional_drive + lag_boost * 0.6 + lead_boost * 0.5
+        signed_micro = micro if direction == "up" else -micro
+        micro_boost = float(np.clip(signed_micro * 0.20, -0.06, 0.06))
+        total_drive = directional_drive + lag_boost * 0.6 + lead_boost * 0.5 + micro_boost
 
         if total_drive < self.min_abs_momentum * 0.30:
             return self._reject("against_mom")
@@ -153,7 +152,8 @@ class EnsembleSignal:
         raw = (
             0.38 * signed_mom
             + 0.35 * signed_open
-            + 0.10 * signed_imb
+            + 0.08 * signed_imb
+            + 0.04 * float(np.clip(signed_micro, -1.0, 1.0))
             + 0.05 * time_term
             + 0.08 * cheap_term
             + lag_boost
@@ -209,6 +209,7 @@ class EnsembleSignal:
                 "drive": total_drive,
                 "lag_boost": lag_boost,
                 "lead_boost": lead_boost,
+                "microprice_boost": micro_boost,
                 "twap_lock": twap_lock,
                 "edge": raw_edge,
                 "effective_fee": self._effective_fee(entry, fee_rate),
