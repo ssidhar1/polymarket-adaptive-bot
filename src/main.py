@@ -105,6 +105,17 @@ def _prune_cooldowns(cooldown_until: dict, now: float):
         del cooldown_until[k]
 
 
+def _can_open_for_market(risk, tracker, size: float, open_count: int, asset: str, window: str) -> bool:
+    positions = tracker.get_open_list()
+    reserved = sum(float(p.size_usd) for p in positions)
+    asset_used = sum(float(p.size_usd) for p in positions if p.asset == asset)
+    window_used = sum(float(p.size_usd) for p in positions if p.window == window)
+    return risk.can_open(
+        size, open_count=open_count, reserved_exposure=reserved,
+        asset_exposure=asset_used, window_exposure=window_used,
+    )
+
+
 def run_paper(config: dict):
     global _shutdown
     os_signal.signal(os_signal.SIGINT, _handle_signal)
@@ -250,6 +261,7 @@ def run_paper(config: dict):
                                     "momentum": trade.get("momentum"),
                                 })
                                 trade_log.log(trade, score=trade.get("score", 0))
+                                _save_state(state, risk, learner, tracker)
                                 session_resolves += 1
                                 session_pnl += float(trade["pnl"])
                                 if float(trade["pnl"]) > 0:
@@ -316,6 +328,10 @@ def run_paper(config: dict):
 
                         book_up = data.get_order_book(up_token)
                         book_down = data.get_order_book(down_token)
+                        max_book_age = float(config.get("execution", {}).get("max_book_age_seconds", 8))
+                        if any(time.time() - float(b.get("fetched_at", 0)) > max_book_age
+                               for b in (book_up, book_down)):
+                            continue
                         up_mid = book_up.get("mid")
                         down_mid = book_down.get("mid")
                         up_ask = book_up.get("best_ask") or best_ask(book_up)
@@ -331,11 +347,12 @@ def run_paper(config: dict):
                         mom = prices.momentum(asset, hist)
 
                         try:
-                            live_px = float((prices.cache or {}).get(asset) or 0)
-                            if live_px <= 0:
-                                live_px = float((prices.get_prices() or {}).get(asset) or 0)
+                            live_px = float(prices.get_fresh_price(asset, max_age=15.0) or 0)
                         except Exception:
                             live_px = 0.0
+                        if live_px <= 0:
+                            logger.debug(f"Skipping {slug}: spot price feed is stale")
+                            continue
                         if slug and live_px > 0 and slug not in window_open_px:
                             rem = float(m.get("_remaining_s") or 0)
                             win_s = float(m.get("_window_seconds") or 300)
@@ -391,57 +408,17 @@ def run_paper(config: dict):
                         feat_dn["other_vs_open"] = other_vs
                         feat_dn["window_lead"] = window_lead
 
-                        arb = ensemble.complete_set_arb(
+                        # Complete-set opportunities are monitored but not executed.
+                        # Two sequential legs are not atomic; a one-leg fill creates
+                        # unhedged directional exposure and can fake arbitrage profits.
+                        arb_watch = ensemble.complete_set_arb(
                             up_mid, down_mid, up_ask=up_ask, down_ask=down_ask
                         )
-                        if arb:
-                            budget = risk.size_position(
-                                arb["score"],
-                                edge_after_fees=arb.get("edge"),
-                                regime=regime,
+                        if arb_watch:
+                            logger.info(
+                                f"ARB WATCH (execution disabled) | estimated_edge={arb_watch['edge']:.3f} "
+                                f"| {slug[:40]}"
                             )
-                            up_px = float(arb["up_price"])
-                            dn_px = float(arb["down_price"])
-                            pair_cost = up_px + dn_px
-                            if budget > 0 and pair_cost > 0:
-                                n_shares = budget / pair_cost
-                                size_up = n_shares * up_px
-                                size_dn = n_shares * dn_px
-                                if (
-                                    risk.can_open(size_up, open_count=open_n)
-                                    and risk.can_open(size_dn, open_count=open_n + 1)
-                                ):
-                                    meta = _timing_meta(
-                                        m, feat_up, arb["score"], arb.get("edge") or 0,
-                                        mom, regime, "arb",
-                                    )
-                                    legs_ok = True
-                                    for side, token, price, sz in [
-                                        ("up", up_token, up_px, size_up),
-                                        ("down", down_token, dn_px, size_dn),
-                                    ]:
-                                        order = executor.place_order(
-                                            token, "buy", price, sz, mid_id,
-                                            already_aggressive=True,
-                                        )
-                                        if not order:
-                                            legs_ok = False
-                                            break
-                                        tracker.add(
-                                            order, direction=side, slug=slug,
-                                            end_date=m.get("endDate") or m.get("end_date_iso"),
-                                            meta=meta,
-                                        )
-                                        open_n += 1
-                                    if legs_ok:
-                                        cooldown_until[mid_id] = now + cooldown_sec
-                                        trades_this_cycle += 1
-                                        logger.info(
-                                            f"ARB SET | edge={arb['edge']:.3f} | "
-                                            f"shares≈{n_shares:.1f} | spend=${size_up+size_dn:.1f} | "
-                                            f"h={meta['hour_utc']} win={meta['window']} | {slug[:40]}"
-                                        )
-                                    continue
 
                         sig_up = ensemble.directional_score(feat_up, preferred_side="up")
                         sig_dn = ensemble.directional_score(feat_dn, preferred_side="down")
@@ -506,7 +483,7 @@ def run_paper(config: dict):
                             edge_after_fees=edge,
                             regime=regime,
                         )
-                        if size <= 0 or not risk.can_open(size, open_count=open_n):
+                        if size <= 0 or not _can_open_for_market(risk, tracker, size, open_n, asset, str(m.get("_window") or "")):
                             continue
 
                         # Regime-conditional pyramid (once per market)
@@ -515,7 +492,7 @@ def run_paper(config: dict):
                         if (regime == "favorable" and existing and len(existing) == 1
                             and cooldown_until.get(pyr_key, 0) <= now):
                             size = size * 0.50
-                            if not risk.can_open(size, open_count=open_n):
+                            if not _can_open_for_market(risk, tracker, size, open_n, asset, str(m.get("_window") or "")):
                                 continue
                             cooldown_until[pyr_key] = now + cooldown_sec * 2
 
@@ -533,6 +510,7 @@ def run_paper(config: dict):
                             end_date=m.get("endDate") or m.get("end_date_iso"),
                             meta=meta,
                         )
+                        _save_state(state, risk, learner, tracker)
                         open_n += 1
                         trades_this_cycle += 1
                         cooldown_until[mid_id] = now + cooldown_sec
