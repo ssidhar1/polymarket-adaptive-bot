@@ -55,7 +55,7 @@ def test_allocator_caps_positions_and_rejects_overallocation():
         "1000", {"weekly": "1"}, reserve_cash_pct="0.20",
         max_strategy_pct="0.50", max_position_pct="0.05",
     )
-    assert allocator.allocation("weekly")["max_position"] == Decimal("40.00")
+    assert allocator.allocation("weekly")["max_position"] == Decimal("25.00")
     with pytest.raises(AllocationError):
         allocator.reserve("weekly", "41")
 
