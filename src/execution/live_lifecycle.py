@@ -299,6 +299,17 @@ class LiveLifecycle:
                     original = _decimal(row.get("size", "0"), "original order quantity")
                     if original > 0 and filled >= original:
                         status, reason = "FILLED", "Account trade fills cover the original order quantity"
+                    elif row.get("status") == "CANCEL_REQUESTED":
+                        status, reason = "CANCELED", "Cancel was acknowledged and order is absent from complete open-order listing"
+                    elif row.get("expires_at"):
+                        try:
+                            expiry = datetime.fromisoformat(str(row["expires_at"]).replace("Z", "+00:00"))
+                            if expiry.tzinfo is not None and expiry <= datetime.now(timezone.utc):
+                                status, reason = "EXPIRED", "GTD expiry passed and order is absent from complete open-order listing"
+                            else:
+                                status, reason = "NOT_OPEN_RECONCILE_REQUIRED", "Absent from open-order listing; terminal reason not yet proven"
+                        except (TypeError, ValueError):
+                            status, reason = "NOT_OPEN_RECONCILE_REQUIRED", "Unparseable expiry; manual reconciliation required"
                     else:
                         status = "NOT_OPEN_RECONCILE_REQUIRED"
                         reason = "Absent from open-order listing; terminal reason not yet proven"
