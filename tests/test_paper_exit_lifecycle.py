@@ -100,3 +100,17 @@ def test_paper_lifecycle_sync_restores_partial_position_after_restart(tmp_path):
     assert restored.shares == pytest.approx(6)
     assert restored.entry_price == pytest.approx(.40)
     assert restored.fee == pytest.approx(.024)
+
+
+def test_position_tracker_partial_close_reduces_remaining_shares_and_entry_fee():
+    from src.execution.positions import PositionTracker
+    tracker = PositionTracker()
+    tracker.add({
+        "order_id": "p", "market_id": "m", "token_id": "t", "side": "buy",
+        "fill_price": .40, "size_usd": 4.0, "shares": 10.0, "fee": .04,
+    }, direction="up")
+    trade = tracker.partial_close("p", 4, .50, .02, "take_profit", "sell:p:4")
+    assert trade["gross_pnl"] == pytest.approx(.40)
+    assert trade["pnl"] == pytest.approx(.364)
+    assert tracker.open["p"].shares == pytest.approx(6)
+    assert tracker.open["p"].fee == pytest.approx(.024)
