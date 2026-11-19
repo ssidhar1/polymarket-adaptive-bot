@@ -8,7 +8,7 @@
 - **TWAP-lock** — vs_open dominates near expiry
 - **Cross-asset lag** — BTC informs ETH and vice versa
 - **Cross-window lead-lag** — real 5m book mid informs overlapping 15m
-- **Maker-rebate simulation** — paper fills apply ~20% fee reduction when prefer_maker
+- **Conservative paper execution** — aggressive fills pay taker fees and adverse slippage; no unverified maker rebate
 - **Setup-bucket learning** — boosts/suppresses by (hour, remaining, vs_open strength)
 - **Regime-conditional pyramiding** — half-size second add, once per market, in favorable regime
 - Aggressive compounding Kelly in degen + favorable
