@@ -32,6 +32,7 @@ class OpenPosition:
     score: float = 0.0
     edge_after_fees: float = 0.0
     momentum: float = 0.0
+    vs_open: float = 0.0
     regime: str = ""
     trade_type: str = "dir"
 
@@ -74,6 +75,7 @@ class PositionTracker:
             score=float(meta.get("score") or 0.0),
             edge_after_fees=float(meta.get("edge_after_fees") or 0.0),
             momentum=float(meta.get("momentum") or 0.0),
+            vs_open=float(meta.get("vs_open") or 0.0),
             regime=str(meta.get("regime") or ""),
             trade_type=str(meta.get("trade_type") or "dir"),
         )
@@ -113,6 +115,7 @@ class PositionTracker:
             "score": pos.score,
             "edge_after_fees": pos.edge_after_fees,
             "momentum": pos.momentum,
+            "vs_open": pos.vs_open,
             "regime": pos.regime,
             "trade_type": pos.trade_type,
             "hold_seconds": hold_s,
@@ -197,6 +200,7 @@ class PositionTracker:
                 "score": pos.score,
                 "edge_after_fees": pos.edge_after_fees,
                 "momentum": pos.momentum,
+                "vs_open": pos.vs_open,
                 "regime": pos.regime,
                 "trade_type": pos.trade_type,
             })
@@ -235,6 +239,7 @@ class PositionTracker:
                     score=float(r.get("score") or 0),
                     edge_after_fees=float(r.get("edge_after_fees") or 0),
                     momentum=float(r.get("momentum") or 0),
+                    vs_open=float(r.get("vs_open") or 0),
                     regime=str(r.get("regime") or ""),
                     trade_type=str(r.get("trade_type") or "dir"),
                 )
