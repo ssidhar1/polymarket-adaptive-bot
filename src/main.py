@@ -648,19 +648,19 @@ def run_paper(config: dict):
                         )
                         if not order:
                             continue
-                        tracker.add(
-                            order, direction=direction, slug=slug,
-                            end_date=m.get("endDate") or m.get("end_date_iso"),
-                            meta=meta,
-                        )
-                        tracked = tracker.open[order["order_id"]]
+                        entry_opened_at = datetime.now(timezone.utc)
                         paper_lifecycle.record_entry_fill(
                             position_id=order["order_id"], token_id=token,
                             market_id=mid_id, direction=direction, quantity=order["shares"],
                             price=order["fill_price"], fee_usd=order["fee"],
-                            opened_at=tracked.opened_at.isoformat(),
+                            opened_at=entry_opened_at.isoformat(),
                             metadata={**meta, "slug": slug, "end_date": m.get("endDate") or m.get("end_date_iso")},
                             event_id=f"entry:{order['order_id']}",
+                        )
+                        tracker.add(
+                            order, direction=direction, slug=slug,
+                            end_date=m.get("endDate") or m.get("end_date_iso"),
+                            meta=meta, opened_at=entry_opened_at,
                         )
                         _save_state(state, risk, learner, tracker)
                         open_n += 1
