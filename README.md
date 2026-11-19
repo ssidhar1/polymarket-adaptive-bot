@@ -5,7 +5,7 @@
 > ~50/50 base rate + dynamic fees. Edge from structure: TWAP-lock, cross-asset lag, cross-window lead-lag, maker rebate, setup-bucket learning, and regime-conditional pyramiding.
 
 ## Unique edges
-- **TWAP-lock** — vs_open dominates near expiry
+- **Window-open reference** — opening-price context is captured only near the actual market boundary; a mid-window restart is not mislabeled as the open
 - **Cross-asset lag** — BTC informs ETH and vice versa
 - **Cross-window lead-lag** — real 5m book mid informs overlapping 15m
 - **Conservative paper execution** — aggressive fills pay taker fees and configured adverse slippage; no unverified maker rebate
@@ -17,7 +17,7 @@
 - **Setup-bucket learning** — boosts/suppresses by (hour, remaining, vs_open strength)
 - **Regime-conditional pyramiding** — half-size second add, once per market, in favorable regime
 - Conservative fractional sizing until out-of-sample probability calibration is proven
-- Dynamic fees, complete-set arb, PROOF logs, idle-decay, open-position persistence
+- Market-specific fee schedules, complete-set opportunity watch (no paired execution), PROOF logs, idle-decay, open-position persistence
 
 ## Quick Start
 ```bash
