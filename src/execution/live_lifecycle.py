@@ -14,7 +14,7 @@ from decimal import Decimal, InvalidOperation
 from email.utils import parsedate_to_datetime
 from typing import Callable
 
-from src.execution.live import (
+from src.execution.fee_accounting import explicit_fee_usdc, fee_coverage\nfrom src.execution.live import (
     DuplicateLiveIntent,
     LiveExecutionDisabled,
     LiveExecutionError,
@@ -85,7 +85,10 @@ class LiveLifecycle:
             db.execute("""CREATE TABLE IF NOT EXISTS live_fills (
                 trade_id TEXT PRIMARY KEY, order_id TEXT NOT NULL, asset_id TEXT NOT NULL,
                 side TEXT NOT NULL, price TEXT NOT NULL, size TEXT NOT NULL,
-                fee_rate_bps TEXT, matched_at TEXT, raw_json TEXT NOT NULL)""")
+                fee_rate_bps TEXT, fee_amount_usdc TEXT, matched_at TEXT, raw_json TEXT NOT NULL)""")
+            fill_cols = {r[1] for r in db.execute("PRAGMA table_info(live_fills)")}
+            if "fee_amount_usdc" not in fill_cols:
+                db.execute("ALTER TABLE live_fills ADD COLUMN fee_amount_usdc TEXT")
             db.execute("""CREATE TABLE IF NOT EXISTS live_position_snapshots (
                 asset_id TEXT PRIMARY KEY, condition_id TEXT, shares TEXT NOT NULL,
                 avg_price TEXT NOT NULL, cost_usdc TEXT NOT NULL, current_value TEXT NOT NULL,
