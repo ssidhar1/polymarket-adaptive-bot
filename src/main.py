@@ -242,6 +242,7 @@ def run_paper(config: dict):
                                     "direction": trade["direction"],
                                     "entry_price": trade["entry_price"],
                                     "pnl": trade["pnl"],
+                                    "size_usd": trade.get("size_usd", 0.0),
                                     "stale": False,
                                     "hour_utc": trade.get("hour_utc"),
                                     "time_remaining_s": trade.get("time_remaining_s"),
