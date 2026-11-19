@@ -69,3 +69,9 @@ Paper mode only. The dormant live adapter remains disconnected and `run_live()` 
 - `src/research/walk_forward.py` validates event-time forecast records, rejects forecasts timestamped at/after resolution, and scores chronological out-of-sample test windows with Brier score and per-share net P&L after supplied fees/slippage.
 - The evaluator does not fit or calibrate a model. A future strategy-specific trainer must use only data available before each test window, and forecasts must be persisted before outcomes are known. No historical dataset or performance claim is included in this commit.
 - Remaining blockers before weekly paper execution: authoritative resolution-rule parser/audit, event-time spot and volatility history, volatility calibration by horizon/regime, market-specific fee validation, durable forecast capture, and integration with shared risk + paper ledger.
+
+
+## Event-time forecast storage and strategy scorecards
+- `src/research/forecast_store.py` stores immutable forecast observations separately from later resolution events. Unmodeled scanner observations may be retained with a null probability; they are excluded from probability scorecards. Resolution events require a later timestamp and a source reference.
+- `src/research/scorecard.py` reports sample size, win rate, Brier score, per-share net P&L after supplied fees/slippage, cost totals and drawdown sequence. It is explicitly research-only and does not allocate capital.
+- These research components are not yet connected to the production scan loop or existing paper lifecycle. Until that integration is reviewed, no weekly candidates can open positions and no allocator compounding is claimed.
