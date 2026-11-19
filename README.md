@@ -8,10 +8,15 @@
 - **TWAP-lock** — vs_open dominates near expiry
 - **Cross-asset lag** — BTC informs ETH and vice versa
 - **Cross-window lead-lag** — real 5m book mid informs overlapping 15m
-- **Conservative paper execution** — aggressive fills pay taker fees and adverse slippage; no unverified maker rebate
+- **Conservative paper execution** — aggressive fills pay taker fees and configured adverse slippage; no unverified maker rebate
+- **Microprice pressure** — top-of-book queue imbalance contributes a bounded experimental feature
+- **Freshness gates** — stale Binance spot prices and stale order-book snapshots are rejected
+- **Portfolio caps** — total, per-asset, and per-window reserved notional limits
+- **Calibration gate** — heuristic probabilities cannot activate Kelly sizing by default
+- **Complete-set safety** — arb opportunities are logged but not executed until paired-leg atomicity exists
 - **Setup-bucket learning** — boosts/suppresses by (hour, remaining, vs_open strength)
 - **Regime-conditional pyramiding** — half-size second add, once per market, in favorable regime
-- Aggressive compounding Kelly in degen + favorable
+- Conservative fractional sizing until out-of-sample probability calibration is proven
 - Dynamic fees, complete-set arb, PROOF logs, idle-decay, open-position persistence
 
 ## Quick Start
@@ -24,7 +29,7 @@ cp config.example.yaml config.yaml
 python -m src.main --mode paper
 ```
 
-Watch `PROOF` lines. Redeploy Northflank after pull.
+Watch `PROOF`, `ARB WATCH`, stale-data, and risk-pause logs. Mount a persistent volume at `/app/data` before testing; without it, paper state can be lost on redeploy. The default starting bankroll is $1,000 only when no prior state exists. Set `PAPER_RESET_BANKROLL=1` for one restart if you deliberately want to reset, then remove that variable before the next restart.
 
 Paper first. Live locked until expectancy is clear.
 
