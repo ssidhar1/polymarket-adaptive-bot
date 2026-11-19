@@ -53,6 +53,7 @@ class PaperExecutor:
         size_usd: float,
         market_id: str,
         already_aggressive: bool = True,
+        fee_rate: Optional[float] = None,
     ) -> Optional[Dict]:
         if not token_id or not market_id:
             logger.warning("PAPER SKIP | missing token_id or market_id")
@@ -87,7 +88,8 @@ class PaperExecutor:
             return None
 
         # No maker rebate: aggressive orders cross the spread and pay taker fees.
-        fee_frac = taker_fee_rate(fill_price, rate=self.fee_rate)
+        effective_fee_rate = self.fee_rate if fee_rate is None else max(0.0, min(0.25, _finite(fee_rate, self.fee_rate)))
+        fee_frac = taker_fee_rate(fill_price, rate=effective_fee_rate)
         fee = notional * fee_frac
         order_id = str(uuid.uuid4())[:8]
 
@@ -104,6 +106,7 @@ class PaperExecutor:
             "shares": shares,
             "fee": fee,
             "fee_frac": fee_frac,
+            "fee_rate": effective_fee_rate,
             "maker": False,
             "execution_type": "taker",
             "status": "filled",
