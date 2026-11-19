@@ -321,6 +321,7 @@ class LiveLifecycle:
                     # absence alone does not prove cancellation or expiry.
                     fill_rows = db.execute("SELECT size FROM live_fills WHERE order_id=?", (oid,)).fetchall()
                     filled = sum((_decimal(x[0], "deduplicated fill quantity") for x in fill_rows), Decimal("0"))
+                    filled_qty = filled
                     original = _decimal(row.get("size", "0"), "original order quantity")
                     if original > 0 and filled >= original:
                         status, reason = "FILLED", "Account trade fills cover the original order quantity"
@@ -341,6 +342,7 @@ class LiveLifecycle:
                 else:
                     original = _decimal(_field(open_order, "original_size"), "original order size")
                     matched = _decimal(_field(open_order, "size_matched"), "matched order size")
+                    filled_qty = matched
                     if matched >= original:
                         status, reason = "FILLED", "Exchange open-order record reports fully matched"
                     elif matched > 0:
@@ -349,7 +351,7 @@ class LiveLifecycle:
                         status, reason = "ACCEPTED", None
                 db.execute("""UPDATE live_order_intents SET status=?,filled_size=?,expires_at=?,
                     last_reconciled_at=?,terminal_reason=? WHERE intent_key=?""",
-                    (status, str(_field(open_order, "size_matched", row.get("filled_size", "0"))) if open_order else row.get("filled_size", "0"),
+                    (status, str(filled_qty),
                      _iso(_field(open_order, "expires_at")) if open_order else row.get("expires_at"),
                      now, reason, row["intent_key"]))
         self.positions = positions
