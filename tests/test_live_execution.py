@@ -16,6 +16,9 @@ class FakeClient:
         self.allowance=allowance; self.fail=fail; self.posts=0; self.created=None
     def get_order_book(self, asset_id): return self.book
     def list_open_orders(self): return Paginator()
+    def list_positions(self, status):
+        assert status == "OPEN"
+        return Paginator()
     def get_balance_allowance(self, asset_type):
         return SimpleNamespace(balance=2_000_000_000,allowances={"exchange":self.allowance})
     def create_limit_order(self, **kwargs): self.created=kwargs; return object()
@@ -65,3 +68,14 @@ def test_ambiguous_submit_is_quarantined(tmp_path):
     c.fail=False
     with pytest.raises(DuplicateLiveIntent): submit(ex)
     assert c.posts==1
+
+def test_existing_positions_count_toward_portfolio_cap(tmp_path):
+    client = FakeClient()
+    class PositionPaginator:
+        def first_page(self):
+            return Page([SimpleNamespace(current_value="45", total_cost_usdc="45")])
+    client.list_positions = lambda status: PositionPaginator()
+    executor = make(tmp_path, client)
+    with pytest.raises(LiveExecutionError, match="Portfolio exposure"):
+        submit(executor)
+    assert client.posts == 0
