@@ -86,6 +86,11 @@ def _save_state(state: StateStore, risk: RiskManager, learner: AdaptiveLearner, 
         state.save({
             "bankroll": risk.bankroll,
             "peak_bankroll": risk.peak_bankroll,
+            "daily_pnl": risk.daily_pnl,
+            "risk_current_day": risk.current_day.isoformat(),
+            "risk_paused": risk.paused,
+            "risk_pause_reason": risk.pause_reason,
+            "exploration_used_today": risk.exploration_used_today,
             "learner": learner.export_state(),
             "open_count": tracker.open_count(),
             "open_positions": tracker.export_open(),
@@ -121,13 +126,24 @@ def run_paper(config: dict):
         start_bank = float(saved.get("bankroll", config.get("bankroll", 1000.0)))
 
     risk = RiskManager(config, start_bank)
+    # Restore intraday controls only for the same UTC date. Drawdown is
+    # independently recalculated from the persisted peak bankroll.
+    if saved.get("risk_current_day") == risk.current_day.isoformat():
+        try:
+            risk.daily_pnl = float(saved.get("daily_pnl", 0.0))
+            risk.exploration_used_today = max(0.0, float(saved.get("exploration_used_today", 0.0)))
+            if bool(saved.get("risk_paused")):
+                risk.paused = True
+                risk.pause_reason = str(saved.get("risk_pause_reason") or "Persisted risk pause")
+            risk._check_circuit_breakers()
+        except (TypeError, ValueError):
+            logger.warning("Could not restore intraday risk state; keeping conservative defaults")
     if saved.get("peak_bankroll") and not os.getenv("PAPER_RESET_BANKROLL"):
         try:
             risk.peak_bankroll = max(risk.bankroll, float(saved["peak_bankroll"]))
         except (TypeError, ValueError):
             pass
 
-    risk.clear_daily_pause("service restart")
 
     learner = AdaptiveLearner(config)
     learner.import_state(saved.get("learner") or {})
@@ -181,6 +197,7 @@ def run_paper(config: dict):
             risk.update_bankroll(risk.bankroll)
 
             if risk.paused:
+                _save_state(state, risk, learner, tracker)
                 now_t = time.time()
                 if now_t - last_pause_log > 600:
                     logger.warning(
@@ -249,55 +266,13 @@ def run_paper(config: dict):
                         grace_seconds=int(config.get("execution", {}).get("stale_grace_seconds", 300)),
                         max_hold_minutes=int(config.get("execution", {}).get("stale_max_hold_minutes", 35)),
                     )
-                    if stage == "soft":
-                        mid_px = None
-                        try:
-                            mid_px = data.get_mid_price(pos.token_id)
-                        except Exception:
-                            mid_px = None
-                        if mid_px is not None and 0.02 < float(mid_px) < 0.98:
-                            trade = tracker.resolve(pos.order_id, float(mid_px))
-                            tag = f"mid={float(mid_px):.3f}"
-                        else:
-                            continue
-                        if trade:
-                            risk.record_pnl(trade["pnl"])
-                            learner.log_trade({
-                                "score": trade.get("score", 0.5),
-                                "direction": trade["direction"],
-                                "entry_price": trade["entry_price"],
-                                "pnl": trade["pnl"],
-                                "stale": True,
-                            })
-                            trade_log.log(trade, score=trade.get("score", 0))
-                            session_resolves += 1
-                            session_pnl += float(trade["pnl"])
-                            if float(trade["pnl"]) > 0:
-                                session_wins += 1
-                            logger.warning(
-                                f"STALE SOFT {pos.direction} @ {tag} | pnl=${trade['pnl']:.3f} | "
-                                f"h={trade.get('hour_utc')} win={trade.get('window')}"
-                            )
-                    elif stage == "hard":
-                        trade = tracker.resolve(pos.order_id, 0.5)
-                        if trade:
-                            risk.record_pnl(trade["pnl"])
-                            learner.log_trade({
-                                "score": trade.get("score", 0.5),
-                                "direction": trade["direction"],
-                                "entry_price": trade["entry_price"],
-                                "pnl": trade["pnl"],
-                                "stale": True,
-                            })
-                            trade_log.log(trade, score=trade.get("score", 0))
-                            session_resolves += 1
-                            session_pnl += float(trade["pnl"])
-                            if float(trade["pnl"]) > 0:
-                                session_wins += 1
-                            logger.warning(
-                                f"STALE HARD {pos.direction} @ 0.5 | pnl=${trade['pnl']:.3f} | "
-                                f"h={trade.get('hour_utc')} win={trade.get('window')}"
-                            )
+                    if stage in ("soft", "hard"):
+                        # A midpoint or arbitrary 0.50 mark is not an executable
+                        # exit or authoritative settlement. Keep the position open.
+                        logger.warning(
+                            f"STALE {stage.upper()} | retaining unresolved position "
+                            f"{pos.order_id}; awaiting authoritative market resolution"
+                        )
                 except Exception as e:
                     logger.warning(f"Resolve error for {getattr(pos, 'order_id', '?')}: {e}")
 
