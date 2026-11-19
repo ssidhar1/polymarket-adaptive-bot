@@ -613,7 +613,15 @@ def run_paper(config: dict):
 
 
 def run_live(config: dict):
-    logger.warning("LIVE mode locked. Prove edge in paper first.")
+    # The live adapter is present for isolated, mocked testing only. It is
+    # intentionally not wired into this strategy loop: paper remains the only
+    # supported runtime until live fill reconciliation, exits, and restart
+    # recovery are implemented and separately approved.
+    logger.error(
+        "LIVE MODE REFUSED: dormant live adapter is not connected to the strategy loop. "
+        "Run --mode paper; no real orders were sent."
+    )
+    raise SystemExit(2)
 
 
 def main():
