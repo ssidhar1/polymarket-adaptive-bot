@@ -348,3 +348,35 @@ def test_expiry_manager_never_cancels_manual_wallet_orders(tmp_path):
     lifecycle.reconcile()
     assert lifecycle.cancel_expired_orders() == []
     assert client.cancelled == []
+
+
+def test_explicit_fee_amount_is_persisted_and_reported(tmp_path):
+    client, executor, lifecycle = setup(tmp_path)
+    seed_order(executor)
+    client.orders = [exchange_order(matched="4")]
+    trade = exchange_trade(size="4")
+    trade.fee_usdc = Decimal("0.0125")
+    client.trades = [trade]
+    client.positions = [exchange_position()]
+    lifecycle.reconcile()
+    with executor._db() as db:
+        row = db.execute("SELECT fee_rate_bps,fee_amount_usdc FROM live_fills").fetchone()
+    assert row == ("700", "0.0125")
+    coverage = lifecycle.fee_coverage()
+    assert coverage["fee_complete"] is True
+    assert coverage["explicit_fees_usdc"] == Decimal("0.0125")
+    assert coverage["net_realized_pnl_available"] is False
+
+
+def test_missing_explicit_fee_remains_unknown_even_with_fee_rate(tmp_path):
+    client, executor, lifecycle = setup(tmp_path)
+    seed_order(executor)
+    client.orders = [exchange_order(matched="4")]
+    client.trades = [exchange_trade(size="4")]
+    client.positions = [exchange_position()]
+    lifecycle.reconcile()
+    coverage = lifecycle.fee_coverage()
+    assert coverage["explicit_fee_count"] == 0
+    assert coverage["missing_fee_count"] == 1
+    assert coverage["explicit_fees_usdc"] is None
+    assert coverage["net_realized_pnl_available"] is False
