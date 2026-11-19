@@ -69,9 +69,9 @@ class PaperExitLifecycle:
                 (event_id,position_id,side,quantity,price,fee_usd,created_at)
                 VALUES(?,?, 'BUY',?,?,?,?)""",
                 (str(eid), str(position_id), q, p, fee, str(stamp)))
-            row = db.execute("SELECT position_id,quantity,price FROM paper_fill_events WHERE event_id=?",
+            row = db.execute("SELECT position_id,quantity,price,fee_usd FROM paper_fill_events WHERE event_id=?",
                              (str(eid),)).fetchone()
-            if row["position_id"] != str(position_id) or row["quantity"] != q or row["price"] != p:
+            if row["position_id"] != str(position_id) or row["quantity"] != q or row["price"] != p or row["fee_usd"] != fee:
                 raise PaperLifecycleError("entry event id reused with different fill")
         return self.get_position(position_id)
 
@@ -122,7 +122,7 @@ class PaperExitLifecycle:
             db.execute("BEGIN IMMEDIATE")
             prior = db.execute("SELECT * FROM paper_fill_events WHERE event_id=?", (str(event_id),)).fetchone()
             if prior:
-                if prior["position_id"] != str(position_id) or prior["side"] != "SELL" or prior["quantity"] != q or prior["price"] != p:
+                if prior["position_id"] != str(position_id) or prior["side"] != "SELL" or prior["quantity"] != q or prior["price"] != p or prior["fee_usd"] != fee:
                     raise PaperLifecycleError("exit event id reused with different fill")
                 return self.get_position(position_id)
             buys = db.execute("""SELECT COALESCE(SUM(quantity),0) q,
