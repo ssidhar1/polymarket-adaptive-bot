@@ -159,6 +159,14 @@ class LiveLifecycle:
                 "SELECT * FROM live_order_intents WHERE status NOT IN ('REJECTED','CANCELED','EXPIRED')"
             ).fetchall()]
 
+    def fee_coverage(self) -> dict:
+        """Report explicit-fee coverage; this is not a realized net-P&L report."""
+        with self.executor._db() as db:
+            rows = [dict(r) for r in db.execute(
+                "SELECT fee_amount_usdc FROM live_fills ORDER BY matched_at, trade_id"
+            ).fetchall()]
+        return fee_coverage(rows)
+
     def _record_trade(self, trade, intents_by_id, unmatched_intents=()):
         trade_id = str(_field(trade, "id", "") or "")
         if not trade_id:
