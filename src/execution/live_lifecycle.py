@@ -189,10 +189,33 @@ class LiveLifecycle:
         """Refresh all persisted active intents, account fills and wallet positions."""
         self.last_reconcile_ok = False
         rows = self._intent_rows()
-        intents_by_id = {str(r.get("order_id")): r for r in rows if r.get("order_id")}
         asset_ids = sorted({str(r["asset_id"]) for r in rows if r.get("asset_id")})
         open_items = self._items(self._read(self.client.list_open_orders))
         self.open_orders = {str(_field(o, "id")): o for o in open_items}
+
+        # Recover a lost submit acknowledgement only when exactly one exchange
+        # order matches the persisted immutable intent attributes.
+        with self.executor._db() as db:
+            for row in rows:
+                if row.get("order_id") or row.get("status") not in {"SUBMITTING", "UNKNOWN"}:
+                    continue
+                matches = [
+                    o for o in open_items
+                    if str(_field(o, "asset_id", _field(o, "token_id", ""))) == str(row["asset_id"])
+                    and str(_field(o, "side", "")).upper() == str(row["side"]).upper()
+                    and _decimal(_field(o, "price"), "recovery order price") == _decimal(row["price"], "intent price")
+                    and _decimal(_field(o, "original_size"), "recovery order size") == _decimal(row["size"], "intent size")
+                ]
+                if len(matches) == 1:
+                    recovered_id = str(_field(matches[0], "id"))
+                    db.execute("UPDATE live_order_intents SET order_id=?,status='ACCEPTED',terminal_reason=? WHERE intent_key=?",
+                               (recovered_id, "Recovered by exact exchange order fingerprint after lost acknowledgement", row["intent_key"]))
+                    row["order_id"] = recovered_id
+                    row["status"] = "ACCEPTED"
+                elif len(matches) > 1:
+                    logger.error("Ambiguous recovery for intent %s; manual reconciliation required", row["intent_key"])
+
+        intents_by_id = {str(r.get("order_id")): r for r in rows if r.get("order_id")}
         new_fills = 0
         for asset_id in asset_ids:
             trades = self._items(self._read(self.client.list_account_trades, asset_id=asset_id))
@@ -271,6 +294,12 @@ class LiveLifecycle:
         self.last_reconcile_ok = True
         return {"open_orders": len(self.open_orders), "positions": len(self.positions),
                 "new_fills": new_fills, "reconciled_at": self.last_reconcile_at.isoformat()}
+
+    def run_maintenance(self) -> dict:
+        """Restart-safe read reconciliation followed by expiry cancellation."""
+        snapshot = self.reconcile()
+        snapshot["cancel_requested"] = self.cancel_expired_orders()
+        return snapshot
 
     def cancel_expired_orders(self, *, safety_seconds=5) -> list[str]:
         """Cancel orders nearing/at GTD expiry; verify absence on next reconcile."""
