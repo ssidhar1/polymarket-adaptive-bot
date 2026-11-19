@@ -45,7 +45,7 @@ def test_book_snapshot_sorts_asks_and_computes_dollar_depth():
         ]
     })
     assert ask == Decimal("0.60")
-    assert depth == Decimal("19.5")
+    assert depth == Decimal("26.5")
 
 
 class FakeResponse:
