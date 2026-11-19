@@ -519,6 +519,7 @@ def run_paper(config: dict):
                         cooldown_until[mid_id] = now + cooldown_sec
                         if is_expl:
                             risk.record_exploration(size)
+                        _save_state(state, risk, learner, tracker)
 
                         tag = "EXPL" if is_expl else "DIR"
                         logger.info(
