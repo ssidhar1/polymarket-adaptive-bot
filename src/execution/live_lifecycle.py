@@ -128,6 +128,27 @@ class LiveLifecycle:
                 raise LiveExecutionError("Exchange pagination exceeded safety cap; reconciliation incomplete")
         return out
 
+    def _read_items(self, factory, *args, **kwargs):
+        """Retry a complete paginated GET from page one after transient failures."""
+        for attempt in range(self.read_attempts):
+            try:
+                paginator = self._read(factory, *args, **kwargs)
+                return self._items(paginator)
+            except Exception as exc:
+                name = type(exc).__name__.lower()
+                retryable = any(x in name for x in (
+                    "ratelimit", "rate_limit", "transport", "timeout",
+                    "connection", "temporarilyunavailable",
+                ))
+                if not retryable or attempt + 1 >= self.read_attempts:
+                    raise
+                delay = _retry_after(exc)
+                if delay is None:
+                    delay = min(4.0, self.backoff_seconds * (2 ** attempt))
+                logger.warning("Paginated read failed (%s); restarting from first page in %.2fs",
+                               type(exc).__name__, delay)
+                self.sleep(delay)
+
     def _intent_rows(self):
         with self.executor._db() as db:
             db.row_factory = __import__("sqlite3").Row
@@ -210,7 +231,7 @@ class LiveLifecycle:
         self.last_reconcile_ok = False
         rows = self._intent_rows()
         asset_ids = sorted({str(r["asset_id"]) for r in rows if r.get("asset_id")})
-        open_items = self._items(self._read(self.client.list_open_orders))
+        open_items = self._read_items(self.client.list_open_orders)
         self.open_orders = {str(_field(o, "id")): o for o in open_items}
 
         # Recover a lost submit acknowledgement only when exactly one exchange
@@ -238,7 +259,7 @@ class LiveLifecycle:
         intents_by_id = {str(r.get("order_id")): r for r in rows if r.get("order_id")}
         new_fills = 0
         for asset_id in asset_ids:
-            trades = self._items(self._read(self.client.list_account_trades, asset_id=asset_id))
+            trades = self._read_items(self.client.list_account_trades, asset_id=asset_id)
             for trade in trades:
                 unmatched = [r for r in rows if not r.get("order_id")]
                 if self._record_trade(trade, intents_by_id, unmatched):
@@ -246,7 +267,7 @@ class LiveLifecycle:
 
         # Wallet positions are authoritative for current holdings. Persist the
         # exact SDK snapshot; don't infer balances from order acknowledgements.
-        position_items = self._items(self._read(self.client.list_positions, status="OPEN", full_history=True))
+        position_items = self._read_items(self.client.list_positions, status="OPEN", full_history=True)
         now = datetime.now(timezone.utc).isoformat()
         positions = {}
         with self.executor._db() as db:
@@ -403,8 +424,14 @@ class LiveLifecycle:
             raise LiveExecutionError("Both sides of book required for exit")
         best_bid = max(_decimal(_field(x, "price"), "bid") for x in bids)
         best_ask = min(_decimal(_field(x, "price"), "ask") for x in asks)
-        if best_ask <= best_bid or px <= best_bid:
+        if best_ask <= best_bid or best_ask - best_bid > _decimal(self.config.get("max_spread", "0.05"), "max spread"):
+            raise LiveExecutionError("Crossed book or exit spread cap exceeded")
+        if px <= best_bid:
             raise LiveExecutionError("SELL would cross/lock bid; passive-only exit refused")
+        if px * qty > _decimal(self.config.get("max_order_notional_usd", 10), "max order notional"):
+            raise LiveExecutionError("Exit order notional cap exceeded")
+        if len(self.open_orders) >= int(self.config.get("max_open_orders", 1)):
+            raise LiveExecutionError("Open-order cap reached before exit")
         if qty < _decimal(_field(book, "min_order_size", 0), "minimum order size"):
             raise LiveExecutionError("Exit is below market minimum size")
         balance = self._read(self.client.get_balance_allowance, asset_type="CONDITIONAL", asset_id=str(asset_id))
