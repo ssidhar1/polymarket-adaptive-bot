@@ -232,6 +232,8 @@ def run_paper(config: dict):
 
     trade_log = TradeLogger(path=_data_dir() / "trades.db")
     paper_lifecycle = PaperExitLifecycle(_data_dir() / "paper_lifecycle.db")
+    if os.getenv("PAPER_RESET_BANKROLL", "").lower() in ("1", "true", "yes") and paper_lifecycle.open_positions():
+        raise SystemExit("Refusing bankroll reset while durable paper positions remain open; settle or close them first")
     _sync_paper_ledger(tracker, paper_lifecycle)
 
     assets = config.get("markets", {}).get("targets", ["btc", "eth"]) or ["btc", "eth"]
