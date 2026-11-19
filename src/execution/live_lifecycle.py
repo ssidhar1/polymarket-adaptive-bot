@@ -135,7 +135,7 @@ class LiveLifecycle:
                 "SELECT * FROM live_order_intents WHERE status NOT IN ('REJECTED','CANCELED','FILLED','EXPIRED')"
             ).fetchall()]
 
-    def _record_trade(self, trade, intents_by_id):
+    def _record_trade(self, trade, intents_by_id, unmatched_intents=()):
         trade_id = str(_field(trade, "id", "") or "")
         if not trade_id:
             raise LiveExecutionError("Exchange trade missing immutable trade ID")
@@ -148,6 +148,25 @@ class LiveLifecycle:
         matched_at = _iso(_field(trade, "matched_at"))
         maker_orders = _field(trade, "maker_orders", ()) or ()
         matched_order = intents_by_id.get(order_id)
+        if matched_order is None and order_id:
+            # Recover a fully filled order whose submit acknowledgement and
+            # open-order visibility were both lost. Require a unique exact
+            # asset/side/price fingerprint and a plausible partial quantity.
+            candidates = [
+                r for r in unmatched_intents
+                if not r.get("order_id")
+                and str(r.get("asset_id")) == asset_id
+                and str(r.get("side", "")).upper() == side
+                and _decimal(r.get("price"), "intent price") == price
+                and size <= _decimal(r.get("size"), "intent size")
+            ]
+            if len(candidates) == 1:
+                matched_order = candidates[0]
+                matched_order["order_id"] = order_id
+                with self.executor._db() as db:
+                    db.execute("UPDATE live_order_intents SET order_id=?,status='UNKNOWN',terminal_reason=? WHERE intent_key=?",
+                               (order_id, "Order ID recovered from unique matching account fill", matched_order["intent_key"]))
+                intents_by_id[order_id] = matched_order
         if matched_order is None:
             for maker in maker_orders:
                 candidate = str(_field(maker, "order_id", "") or "")
@@ -220,7 +239,8 @@ class LiveLifecycle:
         for asset_id in asset_ids:
             trades = self._items(self._read(self.client.list_account_trades, asset_id=asset_id))
             for trade in trades:
-                if self._record_trade(trade, intents_by_id):
+                unmatched = [r for r in rows if not r.get("order_id")]
+                if self._record_trade(trade, intents_by_id, unmatched):
                     new_fills += 1
 
         # Wallet positions are authoritative for current holdings. Persist the
