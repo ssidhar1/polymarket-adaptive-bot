@@ -7,7 +7,7 @@ This module never authorizes a trade by itself.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import erf, log, sqrt
+from math import erf, isfinite, log, sqrt
 
 
 @dataclass(frozen=True)
@@ -50,9 +50,9 @@ class LognormalRangeModel:
         annualized_drift: float = 0.0,
     ) -> float:
         self._validate(spot, annualized_volatility, hours_to_expiry, annualized_drift)
-        if lower is not None and lower <= 0:
+        if lower is not None and (not isfinite(float(lower)) or lower <= 0):
             raise ValueError("lower boundary must be positive or None")
-        if upper is not None and upper <= 0:
+        if upper is not None and (not isfinite(float(upper)) or upper <= 0):
             raise ValueError("upper boundary must be positive or None")
         if lower is not None and upper is not None and lower >= upper:
             raise ValueError("lower boundary must be below upper boundary")
@@ -83,7 +83,7 @@ class LognormalRangeModel:
         annualized_drift: float,
     ) -> None:
         values = (spot, annualized_volatility, hours_to_expiry, annualized_drift)
-        if any(not isinstance(v, (int, float)) for v in values):
-            raise ValueError("model inputs must be numeric")
+        if any(not isinstance(v, (int, float)) or not isfinite(float(v)) for v in values):
+            raise ValueError("model inputs must be finite numbers")
         if spot <= 0 or annualized_volatility < 0 or hours_to_expiry < 0:
             raise ValueError("spot must be positive; volatility and horizon non-negative")
