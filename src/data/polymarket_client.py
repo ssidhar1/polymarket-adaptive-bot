@@ -75,14 +75,19 @@ def _build_session() -> requests.Session:
 
 class PolymarketData:
     def __init__(self):
-        self.session = _build_session()
-        self._lock = threading.Lock()
+        # A shared lock around session.get serialized every request, making
+        # ThreadPoolExecutor discovery effectively sequential. Give each
+        # worker its own pooled Session so independent Gamma requests overlap.
+        self._local = threading.local()
         self._working_template: Optional[str] = None
         logger.info("PolymarketData initialized (multi-slug discovery + CLOB)")
 
     def _get(self, url: str, params: dict = None, timeout: int = 8):
-        with self._lock:
-            return self.session.get(url, params=params or {}, timeout=timeout)
+        session = getattr(self._local, "session", None)
+        if session is None:
+            session = _build_session()
+            self._local.session = session
+        return session.get(url, params=params or {}, timeout=timeout)
 
     def _market_by_slug(self, slug: str) -> Optional[Dict]:
         try:
