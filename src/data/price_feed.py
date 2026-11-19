@@ -94,7 +94,7 @@ class PriceFeed:
             self._fail_count += 1
             if self._fail_count == 3 or self._fail_count % 20 == 0:
                 logger.warning(
-                    f"Binance price feed failing (n={self._fail_count}); using stale cache"
+                    f"Binance price feed failing (n={self._fail_count}); serving only cache entries within the 15s freshness window; older prices omitted"
                 )
         return {a: p for a, p in self.cache.items()
                 if now - self.cache_updated_at.get(a, 0.0) <= self.max_stale_seconds}
@@ -127,6 +127,7 @@ class PriceFeed:
 
         closes = self._fetch_klines(symbol, interval="1m", limit=20)
         if len(closes) < 5:
+            # Do not reuse stale momentum when the upstream candle feed fails.
             self._mtf_cache[asset] = (now, zero)
             return zero
 

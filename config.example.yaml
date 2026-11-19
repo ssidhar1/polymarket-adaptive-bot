@@ -46,3 +46,15 @@ execution:
   max_markets_per_cycle: 16
   stale_grace_seconds: 260
   stale_max_hold_minutes: 30
+
+# Dormant live adapter. The strategy loop remains paper-only; do not enable
+# these settings until live lifecycle integration has a separate review.
+live_execution:
+  enabled: false
+  max_order_notional_usd: 10.0
+  max_position_pct: 0.01
+  max_total_exposure_pct: 0.05
+  max_open_orders: 1
+  max_book_age_seconds: 3
+  max_spread: 0.05
+  order_ttl_seconds: 600
