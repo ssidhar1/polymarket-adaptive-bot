@@ -153,7 +153,7 @@ class LiveLifecycle:
         with self.executor._db() as db:
             db.row_factory = __import__("sqlite3").Row
             return [dict(r) for r in db.execute(
-                "SELECT * FROM live_order_intents WHERE status NOT IN ('REJECTED','CANCELED','FILLED','EXPIRED')"
+                "SELECT * FROM live_order_intents WHERE status NOT IN ('REJECTED','CANCELED','EXPIRED')"
             ).fetchall()]
 
     def _record_trade(self, trade, intents_by_id, unmatched_intents=()):
