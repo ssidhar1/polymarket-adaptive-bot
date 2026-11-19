@@ -18,6 +18,7 @@ class EnsembleSignal:
         self.min_score = float(sig.get("min_score", 0.52))
         self.min_edge = float(risk.get("min_edge_after_fees", 0.015))
         self.fee_rate = float(sig.get("fee_rate", 0.07))
+        self.paper_slippage_bps = max(0.0, float(config.get("execution", {}).get("paper_slippage_bps", 20)))
         self.min_depth_usd = float(sig.get("min_depth_usd", 10.0))
         self.min_time_remaining = float(sig.get("min_time_remaining_pct", 0.05))
         self.max_entry = float(sig.get("max_entry_price", 0.57))
@@ -45,7 +46,7 @@ class EnsembleSignal:
 
     def _effective_fee(self, entry: float, fee_rate: float) -> float:
         # Aggressive entries pay full taker fees; no assumed maker credit.
-        return taker_fee_rate(entry, rate=fee_rate)
+        return taker_fee_rate(entry, rate=fee_rate) + entry * self.paper_slippage_bps / 10_000.0
 
     def complete_set_arb(self, up_mid, down_mid, up_ask=None, down_ask=None):
         up_px = up_ask if up_ask is not None else up_mid
@@ -132,7 +133,9 @@ class EnsembleSignal:
         if window_s >= 800 and abs(signed_lead) > 0.35:
             lead_boost = 0.12 * signed_lead * (1.15 if self.degen else 0.8)
 
-        signed_micro = micro if direction == "up" else -micro
+        # Each feature set is built from the token being considered, so its
+        # microprice sign is already in that token's own UP/DOWN coordinates.
+        signed_micro = micro
         micro_boost = float(np.clip(signed_micro * 0.20, -0.06, 0.06))
         total_drive = directional_drive + lag_boost * 0.6 + lead_boost * 0.5 + micro_boost
 
