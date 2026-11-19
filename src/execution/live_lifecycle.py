@@ -163,6 +163,7 @@ class LiveLifecycle:
     def fee_coverage(self) -> dict:
         """Report explicit-fee coverage; this is not a realized net-P&L report."""
         with self.executor._db() as db:
+            db.row_factory = __import__("sqlite3").Row
             rows = [dict(r) for r in db.execute(
                 "SELECT fee_amount_usdc FROM live_fills ORDER BY matched_at, trade_id"
             ).fetchall()]
