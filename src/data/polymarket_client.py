@@ -231,12 +231,13 @@ class PolymarketData:
                 "mid": mid,
                 "best_bid": bids[0]["price"] if bids else None,
                 "best_ask": asks[0]["price"] if asks else None,
+                "fetched_at": time.time(),
                 "raw": data,
             }
         except Exception as e:
             tid = (token_id or "")[:12]
             logger.warning(f"Book fetch failed for {tid}...: {e}")
-            return {"bids": [], "asks": [], "mid": None, "best_bid": None, "best_ask": None}
+            return {"bids": [], "asks": [], "mid": None, "best_bid": None, "best_ask": None, "fetched_at": time.time()}
 
     def get_mid_price(self, token_id: str) -> Optional[float]:
         return self.get_order_book(token_id).get("mid")
