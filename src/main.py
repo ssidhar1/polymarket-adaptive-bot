@@ -301,6 +301,13 @@ def run_paper(config: dict):
                     if closed and up_p is not None:
                         final = resolver.token_final_price(pos.direction, up_p, down_p)
                         if final is not None:
+                            durable = paper_lifecycle.get_position(pos.order_id)
+                            if durable and durable["is_open"]:
+                                paper_lifecycle.record_settlement(
+                                    position_id=pos.order_id,
+                                    event_id=f"settle:{pos.order_id}",
+                                    resolution_price=final,
+                                )
                             trade = tracker.resolve(pos.order_id, final)
                             if trade:
                                 risk.record_pnl(trade["pnl"])
