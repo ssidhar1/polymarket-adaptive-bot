@@ -359,10 +359,10 @@ def run_paper(config: dict):
                         if slug and live_px > 0 and slug not in window_open_px:
                             rem = float(m.get("_remaining_s") or 0)
                             win_s = float(m.get("_window_seconds") or 300)
-                            # Only accept a spot observation at the actual window
-                            # boundary; a mid-window restart must not relabel a
-                            # late price as the market's opening reference.
-                            if win_s - 5 <= rem <= win_s + 5:
+                            # Accept an observation in the first 15 seconds of
+                            # the window; a mid-window restart must not relabel
+                            # a late price as the market's opening reference.
+                            if win_s - 15 <= rem <= win_s + 5:
                                 window_open_px[slug] = live_px
                         open_px = window_open_px.get(slug)
                         vs_open = 0.0
