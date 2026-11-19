@@ -178,6 +178,10 @@ class LiveExecutor:
         try:
             signed = self.client.create_limit_order(asset_id=str(asset_id), price=px, size=shares,
                                                     side="BUY", post_only=True, expiration=expiry)
+        except Exception as exc:
+            self._update(str(intent_key), "REJECTED", response={"stage": "sign", "error": type(exc).__name__})
+            raise LiveExecutionError("Order signing failed before network submission") from exc
+        try:
             # post_order avoids SDK automatic allowance-recovery side effects.
             response = self.client.post_order(signed)
         except Exception as exc:
@@ -190,6 +194,9 @@ class LiveExecutor:
                       "order_id": str(order_id), "trade_ids": list(_field(response, "trade_ids", ()) or ()),
                       "intent_key": str(intent_key), "post_only": True}
             self._update(str(intent_key), "ACCEPTED", str(order_id), result)
+            with self._db() as db:
+                db.execute("UPDATE live_order_intents SET expires_at=? WHERE intent_key=?",
+                           (datetime.fromtimestamp(expiry, timezone.utc).isoformat(), str(intent_key)))
             logger.warning("LIVE ORDER ACCEPTED | order_id=%s | intent=%s", order_id, intent_key)
             return result
         result = {"ok": False, "message": str(_field(response, "message", "CLOB rejected order")),
