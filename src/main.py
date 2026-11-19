@@ -168,7 +168,10 @@ def run_paper(config: dict):
 
     fee_rate = float(config.get("signals", {}).get("fee_rate", 0.07))
     prefer_maker = bool(config.get("execution", {}).get("prefer_maker", True))
-    executor = PaperExecutor(fee_rate=fee_rate, prefer_maker=prefer_maker)
+    paper_slippage = float(config.get("execution", {}).get("paper_slippage_bps", 20))
+    executor = PaperExecutor(
+        fee_rate=fee_rate, prefer_maker=False, slippage_bps=paper_slippage
+    )
     tracker = PositionTracker()
     if saved.get("open_positions") and not os.getenv("PAPER_RESET_BANKROLL"):
         try:
@@ -371,7 +374,7 @@ def run_paper(config: dict):
                             o_open = window_open_px.get(other_slugs[-1])
                             if o_open and o_open > 0:
                                 try:
-                                    o_live = float((prices.cache or {}).get(other_asset) or 0)
+                                    o_live = float(prices.get_fresh_price(other_asset, max_age=15.0) or 0)
                                     if o_live > 0:
                                         other_vs = max(-1.0, min(1.0, (o_live - o_open) / o_open * 150))
                                 except Exception:
