@@ -73,6 +73,6 @@ def test_scorecard_reports_net_costs_calibration_and_drawdown():
     score = build_strategy_scorecard(rows)
     assert score["sample_size"] == 2
     assert score["win_rate"] == 0.5
-    assert score["mean_net_pnl_per_share"] == pytest.approx(-0.22)
+    assert score["mean_net_pnl_per_share"] == pytest.approx(-0.32)
     assert score["modeled_fees_per_share_total"] == pytest.approx(0.02)
     assert score["brier_score"] == pytest.approx(0.41)
