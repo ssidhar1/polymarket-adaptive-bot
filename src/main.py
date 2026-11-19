@@ -340,7 +340,7 @@ def run_paper(config: dict):
                     # Paper-only TP/SL/time exits. Use a real bid and fresh
                     # timestamp; never use midpoint as executable sell evidence.
                     exit_cfg = config.get("exit_policy", {}) or {}
-                    if bool(exit_cfg.get("enabled", False)):
+                    if bool(exit_cfg.get("enabled", True)):
                         try:
                             durable = paper_lifecycle.get_position(pos.order_id)
                             if durable and durable["is_open"]:
@@ -350,14 +350,18 @@ def run_paper(config: dict):
                                 pos.size_usd = pos.shares * pos.entry_price
                                 book = data.get_order_book(pos.token_id)
                                 bids = book.get("bids") or []
-                                top = bids[0] if bids else None
-                                if isinstance(top, dict):
-                                    bid = float(top.get("price") or 0)
-                                    bid_size = float(top.get("size") or 0)
-                                elif isinstance(top, (list, tuple)) and len(top) >= 2:
-                                    bid, bid_size = float(top[0]), float(top[1])
-                                else:
-                                    bid, bid_size = 0.0, 0.0
+                                parsed_bids = []
+                                for level in bids:
+                                    try:
+                                        if isinstance(level, dict):
+                                            level_price, level_size = float(level.get("price") or 0), float(level.get("size") or 0)
+                                        else:
+                                            level_price, level_size = float(level[0]), float(level[1])
+                                        if 0 < level_price < 1 and level_size > 0:
+                                            parsed_bids.append((level_price, level_size))
+                                    except (TypeError, ValueError, IndexError):
+                                        continue
+                                bid, bid_size = max(parsed_bids, key=lambda x: x[0]) if parsed_bids else (0.0, 0.0)
                                 fetched = float(book.get("fetched_at") or 0)
                                 book_time = datetime.fromtimestamp(fetched, timezone.utc) if fetched > 0 else None
                                 decision = evaluate_exit(
@@ -707,6 +711,14 @@ def run_paper(config: dict):
                 uptime_h = (time.time() - session_start_ts) / 3600.0
                 wr = (session_wins / session_resolves) if session_resolves else 0.0
                 delta = risk.bankroll - session_start_bank
+                paper_metrics = paper_lifecycle.summary()
+                logger.info(
+                    "PAPER LIFECYCLE | entry_shares=%.4f exit_shares=%.4f open=%d "
+                    "gross_realized=$%.4f net_realized=$%.4f modeled_fees=$%.4f",
+                    paper_metrics["entry_shares"], paper_metrics["exit_shares"],
+                    paper_metrics["open_positions"], paper_metrics["gross_realized_pnl_usd"],
+                    paper_metrics["net_realized_pnl_usd"], paper_metrics["fees_usd"],
+                )
                 logger.info(
                     f"PROOF | session_pnl=${session_pnl:.2f} | bank_delta=${delta:.2f} | "
                     f"bank=${risk.bankroll:.2f} start=${session_start_bank:.2f} | "
@@ -747,6 +759,14 @@ def run_paper(config: dict):
 
     logger.info("Shutdown signal received; finishing cycle and persisting state.")
     _save_state(state, risk, learner, tracker)
+    paper_metrics = paper_lifecycle.summary()
+    logger.info(
+        "PAPER LIFECYCLE FINAL | entry_shares=%.4f exit_shares=%.4f open=%d "
+        "gross_realized=$%.4f net_realized=$%.4f modeled_fees=$%.4f",
+        paper_metrics["entry_shares"], paper_metrics["exit_shares"],
+        paper_metrics["open_positions"], paper_metrics["gross_realized_pnl_usd"],
+        paper_metrics["net_realized_pnl_usd"], paper_metrics["fees_usd"],
+    )
     wr = (session_wins / session_resolves) if session_resolves else 0.0
     delta = risk.bankroll - session_start_bank
     logger.info(
