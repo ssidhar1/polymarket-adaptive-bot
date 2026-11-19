@@ -55,3 +55,10 @@ Report per strategy and combined portfolio: candidate count, accepted/rejected r
 
 ## Safety boundary
 Paper mode only. The dormant live adapter remains disconnected and `run_live()` must continue refusing execution. No private keys, wallet approvals, live orders, or real-money transactions are part of this plan.
+
+
+## Weekly market discovery adapter (implemented, observation-only)
+- `src/strategies/weekly_price_ranges.py` pages Gamma market discovery for the next seven days, locally rechecks dates/status, maps the YES token from the actual `outcomes` array, and snapshots the CLOB ask plus top-five ask depth.
+- It applies a non-zero fee estimate (Gamma fee schedule when present; conservative configured fallback otherwise) and explicit slippage assumption. Missing fee metadata is flagged.
+- It deliberately emits `fair_probability=None` with `fair_value_unmodeled` and `resolution_rules_unverified` flags. It is a discovery feed, not a trade signal. It cannot be promoted into the paper executor until the probability model, exact resolution source, and event-time historical replay are validated.
+- The scanner is not yet registered in `src/main.py`; `strategy_portfolio.enabled` remains false.
