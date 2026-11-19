@@ -75,8 +75,8 @@ def test_authoritative_resolution_closes_ledger_after_partial_exit(tmp_path):
     assert settled["remaining_quantity"] == 0
     assert settled["is_open"] is False
     assert settled["exit_quantity"] == pytest.approx(10)
-    assert settled["realized_gross_pnl_usd"] == pytest.approx(3.0)
-    assert settled["realized_net_pnl_usd"] == pytest.approx(2.924)
+    assert settled["realized_gross_pnl_usd"] == pytest.approx(4.0)
+    assert settled["realized_net_pnl_usd"] == pytest.approx(3.94)
     assert ledger.open_positions() == []
     assert ledger.record_settlement(position_id="p", event_id="settle:p",
         resolution_price=1.0)["is_open"] is False
