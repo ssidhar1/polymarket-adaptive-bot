@@ -82,3 +82,11 @@ Only realized, settled net paper P&L may compound a strategy sleeve. Open-positi
 mark-to-market gains do not increase deployable capital. All strategies share
 portfolio-wide exposure and drawdown controls. Paper mode remains the only supported
 runtime; no live orders are connected.
+
+
+### Weekly strategy research status
+
+- Added paginated Gamma/CLOB discovery for binary BTC/ETH price markets resolving within seven days.
+- Candidate token mapping uses the explicit outcome labels; asks and top-five depth are read from CLOB. Fees and slippage are estimated, not assumed free.
+- Fair probability intentionally remains unknown. The lognormal model is a research primitive only; it is not calibrated or connected to live inputs.
+- Chronological walk-forward scoring rejects look-ahead but does not train models. No weekly strategy paper orders are enabled.
