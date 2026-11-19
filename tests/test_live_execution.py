@@ -73,7 +73,7 @@ def test_existing_positions_count_toward_portfolio_cap(tmp_path):
     client = FakeClient()
     class PositionPaginator:
         def first_page(self):
-            return Page([SimpleNamespace(current_value="45", total_cost_usdc="45")])
+            return Page([SimpleNamespace(current_value="46", total_cost_usdc="46")])
     client.list_positions = lambda status: PositionPaginator()
     executor = make(tmp_path, client)
     with pytest.raises(LiveExecutionError, match="Portfolio exposure"):
