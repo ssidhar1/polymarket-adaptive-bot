@@ -57,3 +57,28 @@ readiness. Before wiring it into the strategy, implement and test exchange-state
 reconciliation, partial-fill accounting, cancellation and expiry handling, position
 exits/settlement, crash recovery, rate-limit handling, and end-to-end testnet or
 mock-server scenarios. No live order is submitted by the current application.
+
+
+## Unified strategy engine (in progress)
+
+This repository is the canonical paper-trading runtime for multiple independent
+Polymarket strategies. See [docs/UNIFIED_MASTER_PLAN.md](docs/UNIFIED_MASTER_PLAN.md).
+
+The shared strategy contract and settlement-only strategy capital allocator are
+now available under `src/strategies/`. They are foundational modules and are
+**not yet wired into the existing ASTF execution loop**. The example configuration
+documents the planned strategy sleeves but keeps `strategy_portfolio.enabled: false`
+until persistence, lifecycle integration, and end-to-end replay tests are complete.
+
+Planned research sleeves include:
+- ASTF intraday BTC/ETH 5m and 15m
+- Weekly price-range / threshold markets
+- Evidence-verified near-resolution opportunities
+- Weather-station markets using authoritative station data
+- Cross-market arbitrage (observation-only until safe paired execution exists)
+- Information-latency and settlement intelligence
+
+Only realized, settled net paper P&L may compound a strategy sleeve. Open-position
+mark-to-market gains do not increase deployable capital. All strategies share
+portfolio-wide exposure and drawdown controls. Paper mode remains the only supported
+runtime; no live orders are connected.
