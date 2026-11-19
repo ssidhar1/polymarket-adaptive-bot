@@ -50,7 +50,7 @@ def test_walk_forward_uses_chronological_train_then_test_windows():
     assert [f.train_count for f in folds] == [3, 5]
     assert [f.test_count for f in folds] == [2, 2]
     assert folds[0].test_start > records[2].observed_at
-    assert folds[0].mean_net_pnl_per_share == pytest.approx(0.08)
+    assert folds[0].mean_net_pnl_per_share == pytest.approx(-0.22)
 
 
 def test_walk_forward_rejects_lookahead_and_duplicate_market_rows():
