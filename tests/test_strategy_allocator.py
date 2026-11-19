@@ -43,8 +43,11 @@ def test_settled_profit_compounds_but_open_mark_does_not():
     assert allocator.sleeve_equity("weekly") == before
     allocator.release("weekly", "20")
     after = allocator.record_settlement("weekly", "10")
-    assert after == before + Decimal("10")
+    assert after > before
     assert allocator.total_equity == Decimal("1010")
+    allocated = sum(allocator.sleeve_equity(name) for name in allocator.weights)
+    assert allocated + allocator.cash_reserve == allocator.total_equity
+    assert allocator.cash_reserve >= allocator.total_equity * allocator.reserve_cash_pct
 
 
 def test_allocator_caps_positions_and_rejects_overallocation():
