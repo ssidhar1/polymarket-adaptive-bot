@@ -52,16 +52,27 @@ class StrategyCapitalAllocator:
     def total_equity(self) -> Decimal:
         return self.starting_bankroll + sum(self.realized_net_pnl.values())
 
-    @property
-    def cash_reserve(self) -> Decimal:
-        return max(D("0"), self.total_equity * self.reserve_cash_pct)
-
-    def sleeve_equity(self, strategy: str) -> Decimal:
-        self._require_strategy(strategy)
+    def _raw_sleeve_equity(self, strategy: str) -> Decimal:
         total_weight = sum(self.weights.values())
         seed = self.starting_bankroll * (D("1") - self.reserve_cash_pct)
         seed *= self.weights[strategy] / total_weight
         return max(D("0"), seed + self.realized_net_pnl[strategy])
+
+    def _sleeve_scale(self) -> Decimal:
+        raw_total = sum(self._raw_sleeve_equity(name) for name in self.weights)
+        allocatable = max(D("0"), self.total_equity * (D("1") - self.reserve_cash_pct))
+        if raw_total <= 0 or raw_total <= allocatable:
+            return D("1")
+        return allocatable / raw_total
+
+    @property
+    def cash_reserve(self) -> Decimal:
+        allocated = sum(self.sleeve_equity(name) for name in self.weights)
+        return max(D("0"), self.total_equity - allocated)
+
+    def sleeve_equity(self, strategy: str) -> Decimal:
+        self._require_strategy(strategy)
+        return self._raw_sleeve_equity(strategy) * self._sleeve_scale()
 
     def available(self, strategy: str) -> Decimal:
         return max(D("0"), self.sleeve_equity(strategy) - self.reserved[strategy])
@@ -100,8 +111,10 @@ class StrategyCapitalAllocator:
         """Apply settled net P&L only; callers must not pass open/unrealized P&L."""
         self._require_strategy(strategy)
         pnl = D(str(realized_net_pnl))
-        self.realized_net_pnl[strategy] += pnl
+        prior = self.realized_net_pnl[strategy]
+        self.realized_net_pnl[strategy] = prior + pnl
         if self.total_equity <= 0:
+            self.realized_net_pnl[strategy] = prior
             raise AllocationError("settlement would exhaust portfolio equity")
         return self.sleeve_equity(strategy)
 
