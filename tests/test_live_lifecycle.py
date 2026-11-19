@@ -294,3 +294,32 @@ def test_paginated_read_restarts_from_first_page_after_rate_limit(tmp_path):
         return FlakyPage()
     assert lifecycle._read_items(factory) == ["complete"]
     assert calls["n"] == 2
+
+def test_exit_fill_is_reconciled_against_wallet_position(tmp_path):
+    client, executor, lifecycle = setup(tmp_path)
+    client.positions = [exchange_position()]
+    lifecycle.reconcile()
+    result = lifecycle.submit_exit_limit(
+        intent_key="exit-intent-004", asset_id=ASSET, price=".52",
+        shares="2", approval=PER_ORDER_APPROVAL,
+    )
+    assert result["ok"]
+    client.orders = [exchange_order(order_id="exit-oid", side="SELL", matched="2")]
+    client.trades = [SimpleNamespace(
+        id="trade-sell-1", asset_id=ASSET, taker_order_id="exit-oid", side="SELL",
+        price=Decimal(".52"), size=Decimal("2"), fee_rate_bps=Decimal("700"),
+        matched_at=datetime.now(timezone.utc), maker_orders=(),
+    )]
+    client.positions = [exchange_position(shares="2")]
+    lifecycle.reconcile()
+    with executor._db() as db:
+        fill = db.execute("SELECT side,size FROM live_fills WHERE trade_id='trade-sell-1'").fetchone()
+    assert fill == ("SELL", "2")
+    assert lifecycle.positions[ASSET]["shares"] == Decimal("2")
+
+
+def test_live_entrypoint_remains_hard_disabled(tmp_path):
+    from src.main import run_live
+    with pytest.raises(SystemExit) as exc:
+        run_live(config())
+    assert exc.value.code == 2
