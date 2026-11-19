@@ -130,6 +130,51 @@ class PositionTracker:
         )
         return record
 
+    def partial_close(self, order_id: str, shares: float, exit_price: float,
+                      exit_fee: float, reason: str, event_id: str) -> Optional[Dict]:
+        """Apply a durable-ledger-confirmed partial paper SELL to an open position."""
+        pos = self.open.get(order_id)
+        if not pos:
+            return None
+        qty = float(shares)
+        px = float(exit_price)
+        fee = float(exit_fee)
+        if qty <= 0 or qty > pos.shares + 1e-9 or not 0 < px < 1 or fee < 0:
+            raise ValueError("invalid partial close")
+        fraction = min(1.0, qty / pos.shares)
+        entry_fee_alloc = pos.fee * fraction
+        gross = (px - pos.entry_price) * qty
+        net = gross - entry_fee_alloc - fee
+        closed_at = datetime.now(timezone.utc)
+        record = {
+            "order_id": order_id, "exit_event_id": event_id, "market_id": pos.market_id,
+            "token_id": pos.token_id, "direction": pos.direction, "side": "sell",
+            "entry_price": pos.entry_price, "resolution": px, "exit_price": px,
+            "shares": qty, "size_usd": qty * pos.entry_price,
+            "entry_fee": entry_fee_alloc, "exit_fee": fee, "fee": entry_fee_alloc + fee,
+            "gross_pnl": gross, "pnl": net, "exit_reason": reason,
+            "opened_at": pos.opened_at.isoformat(), "closed_at": closed_at.isoformat(),
+            "slug": pos.slug, "asset": pos.asset, "window": pos.window,
+            "hour_utc": pos.hour_utc, "weekday_utc": pos.weekday_utc,
+            "time_remaining_s": pos.time_remaining_s, "time_remaining_pct": pos.time_remaining_pct,
+            "score": pos.score, "edge_after_fees": pos.edge_after_fees,
+            "momentum": pos.momentum, "vs_open": pos.vs_open, "regime": pos.regime,
+            "trade_type": pos.trade_type, "hold_seconds": (closed_at-pos.opened_at).total_seconds(),
+            "win": 1 if net > 0 else 0,
+        }
+        remaining = max(0.0, pos.shares - qty)
+        pos.shares = remaining
+        pos.size_usd = max(0.0, pos.size_usd * (1.0 - fraction))
+        pos.fee = max(0.0, pos.fee - entry_fee_alloc)
+        if remaining <= 1e-9:
+            self.open.pop(order_id, None)
+        self.closed.append(record)
+        if len(self.closed) > self.max_closed:
+            self.closed = self.closed[-self.max_closed:]
+        logger.info("Paper partial SELL %s qty=%.6f @ %.4f reason=%s net_pnl=$%.4f remaining=%.6f",
+                    order_id, qty, px, reason, net, remaining)
+        return record
+
     def get_open_list(self) -> List[OpenPosition]:
         return list(self.open.values())
 
