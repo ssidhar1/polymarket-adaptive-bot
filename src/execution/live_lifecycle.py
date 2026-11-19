@@ -372,7 +372,11 @@ class LiveLifecycle:
             raise LiveExecutionError("Successful reconciliation required before cancellation")
         now = datetime.now(timezone.utc)
         canceled = []
+        # Never manage/cancel unrelated manual orders in the same wallet.
+        managed_ids = {str(r.get("order_id")) for r in self._intent_rows() if r.get("order_id")}
         for order_id, order in list(self.open_orders.items()):
+            if order_id not in managed_ids:
+                continue
             expiry = _field(order, "expires_at")
             if not isinstance(expiry, datetime):
                 continue
