@@ -241,3 +241,16 @@ def test_unknown_read_error_is_not_retried(tmp_path):
     with pytest.raises(ValueError):
         lifecycle._read(read)
     assert calls["n"] == 1
+
+def test_lost_ack_filled_order_recovered_from_unique_account_trade(tmp_path):
+    client, executor, lifecycle = setup(tmp_path)
+    seed_order(executor, status="UNKNOWN", order_id=None)
+    client.orders = []
+    client.trades = [exchange_trade(size="10")]
+    client.positions = [exchange_position(shares="10")]
+    lifecycle.reconcile()
+    with executor._db() as db:
+        row = db.execute("SELECT order_id,filled_size FROM live_order_intents").fetchone()
+    assert row == ("oid-1", "10")
+    with executor._db() as db:
+        assert db.execute("SELECT COUNT(*) FROM live_fills").fetchone()[0] == 1
