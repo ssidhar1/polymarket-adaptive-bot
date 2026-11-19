@@ -139,6 +139,17 @@ def build_features(
 
     depth = compute_depth_usd(bids, asks)
 
+    # Microprice weights each quote by liquidity resting on the opposite side.
+    microprice = mid
+    microprice_delta = 0.0
+    if bids and asks and mid is not None:
+        bid_px, ask_px = _level_price(bids[0]), _level_price(asks[0])
+        bid_sz, ask_sz = _level_size(bids[0]), _level_size(asks[0])
+        total_sz = bid_sz + ask_sz
+        if bid_px > 0 and ask_px > 0 and total_sz > 0:
+            microprice = (ask_px * bid_sz + bid_px * ask_sz) / total_sz
+            microprice_delta = max(-1.0, min(1.0, (microprice - mid) * 20.0))
+
     spread = 0.0
     if bids and asks:
         spread = max(0.0, _level_price(asks[0]) - _level_price(bids[0]))
@@ -156,6 +167,8 @@ def build_features(
         "momentum": external_momentum,
         "vs_open": float(vs_open or 0.0),
         "book_imbalance": imbalance,
+        "microprice": microprice,
+        "microprice_delta": microprice_delta,
         "volatility_regime": vol_regime,
         "time_remaining_pct": tfeat["time_remaining_pct"],
         "time_remaining_s": tfeat["time_remaining_s"],
