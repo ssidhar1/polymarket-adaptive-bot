@@ -55,7 +55,9 @@ class AdaptiveLearner:
     def _normalized_return(trade: Dict) -> float:
         pnl = _clamp(trade.get("pnl", 0.0), -1e9, 1e9)
         notional = _clamp(trade.get("size_usd", 0.0), 0.0, 1e12)
-        return pnl / notional if notional > 0 else pnl
+        # Missing notional is not comparable; do not silently treat raw USD
+        # P&L as a return percentage.
+        return pnl / notional if notional > 0 else 0.0
 
     def _bucket_key(self, trade: Dict) -> Tuple[int, str, str]:
         hour = int(trade.get("hour_utc") or 0)
