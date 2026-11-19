@@ -254,3 +254,43 @@ def test_lost_ack_filled_order_recovered_from_unique_account_trade(tmp_path):
     assert row == ("oid-1", "10")
     with executor._db() as db:
         assert db.execute("SELECT COUNT(*) FROM live_fills").fetchone()[0] == 1
+
+def test_acknowledged_cancel_is_terminal_only_after_absent_from_open_orders(tmp_path):
+    client, executor, lifecycle = setup(tmp_path)
+    seed_order(executor)
+    client.orders = [exchange_order(expiry=datetime.now(timezone.utc) - timedelta(seconds=2), matched="2")]
+    lifecycle.reconcile()
+    lifecycle.cancel_expired_orders()
+    client.orders = []
+    lifecycle.reconcile()
+    with executor._db() as db:
+        assert db.execute("SELECT status FROM live_order_intents").fetchone()[0] == "CANCELED"
+
+
+def test_gtd_order_is_marked_expired_only_after_expiry_and_absence(tmp_path):
+    client, executor, lifecycle = setup(tmp_path)
+    seed_order(executor)
+    with executor._db() as db:
+        db.execute("UPDATE live_order_intents SET expires_at=? WHERE intent_key='intent-0001'",
+                   ((datetime.now(timezone.utc) - timedelta(seconds=1)).isoformat(),))
+    client.orders = []
+    lifecycle.reconcile()
+    with executor._db() as db:
+        assert db.execute("SELECT status FROM live_order_intents").fetchone()[0] == "EXPIRED"
+
+
+def test_paginated_read_restarts_from_first_page_after_rate_limit(tmp_path):
+    _, _, lifecycle = setup(tmp_path)
+    class RateLimitError(Exception):
+        pass
+    calls = {"n": 0}
+    class FlakyPage:
+        def iter_items(self):
+            calls["n"] += 1
+            if calls["n"] == 1:
+                raise RateLimitError("rate limited during page fetch")
+            return iter(["complete"])
+    def factory():
+        return FlakyPage()
+    assert lifecycle._read_items(factory) == ["complete"]
+    assert calls["n"] == 2
