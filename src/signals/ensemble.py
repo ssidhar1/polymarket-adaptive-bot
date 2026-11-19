@@ -210,6 +210,7 @@ class EnsembleSignal:
             "pass": hard_pass,
             "components": {
                 "drive": total_drive,
+                "imbalance": signed_imb,
                 "lag_boost": lag_boost,
                 "lead_boost": lead_boost,
                 "microprice_boost": micro_boost,
