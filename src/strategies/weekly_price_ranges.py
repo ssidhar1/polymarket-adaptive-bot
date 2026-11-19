@@ -193,7 +193,9 @@ class WeeklyPriceRangeScanner:
             if not isinstance(book, dict):
                 continue
             ask, depth_usd = _book_snapshot(book)
-            if ask is None or depth_usd < self.min_depth_usd:
+            observed_at = self.clock().astimezone(timezone.utc)
+            end_at = _parse_datetime(market.get("endDate") or market.get("end_date"))
+            if ask is None or depth_usd < self.min_depth_usd or end_at is None or observed_at >= end_at:
                 continue
 
             fee_schedule = market.get("feeSchedule")
@@ -203,21 +205,24 @@ class WeeklyPriceRangeScanner:
                 except ValueError:
                     fee_schedule = {}
             fee_rate = _decimal((fee_schedule or {}).get("rate")) if isinstance(fee_schedule, dict) else None
-            flags = ["fair_value_unmodeled", "resolution_rules_unverified"]
+            flags = [
+                "fair_value_unmodeled",
+                "resolution_rules_unverified",
+                "book_source_timestamp_unverified",
+            ]
             if fee_rate is None:
                 fee_rate = self.default_fee_rate
                 flags.append("fee_schedule_defaulted")
             fee_fraction = Decimal(str(taker_fee_rate(float(ask), rate=float(fee_rate))))
             fee_per_share = ask * fee_fraction
             slippage_per_share = ask * self.slippage_bps / Decimal("10000")
-            end_at = _parse_datetime(market.get("endDate") or market.get("end_date"))
             question = str(market.get("question") or "")
             opportunities.append(Opportunity(
                 strategy=self.name,
                 market_id=market_id,
                 token_id=token_id,
                 side="yes",
-                observed_at=now,
+                observed_at=observed_at,
                 executable_price=ask,
                 fair_probability=None,
                 estimated_fees=fee_per_share,
@@ -234,6 +239,7 @@ class WeeklyPriceRangeScanner:
                     "fee_source": "gamma_fee_schedule" if "fee_schedule_defaulted" not in flags else "conservative_config_fallback",
                     "book_depth_usd_top5": str(depth_usd),
                     "source": "gamma_api+clob_api",
+                    "book_timestamp_basis": "local_fetch_time; exchange timestamp not verified",
                     "observation_only": True,
                 },
             ))
