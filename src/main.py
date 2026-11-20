@@ -571,7 +571,9 @@ def run_paper(config: dict):
                         # Two sequential legs are not atomic; a one-leg fill creates
                         # unhedged directional exposure and can fake arbitrage profits.
                         arb_watch = ensemble.complete_set_arb(
-                            up_mid, down_mid, up_ask=up_ask, down_ask=down_ask
+                            up_mid, down_mid, up_ask=up_ask, down_ask=down_ask,
+                            fee_rate=feat_up.get("fee_rate", fee_rate),
+                            fee_exponent=feat_up.get("fee_exponent", 1.0),
                         )
                         if arb_watch:
                             logger.info(
