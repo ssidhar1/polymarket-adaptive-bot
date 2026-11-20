@@ -173,6 +173,9 @@ class MarketEventJournal:
             if as_of_ms is not None and stamp > int(as_of_ms):
                 continue
             if event_type == "book":
+                # Blank-asset events are batch/global events, never token books.
+                if str(payload.get("asset_id") or row["asset_id"]) != str(asset_id):
+                    continue
                 # A full snapshot recovers after a gap, but cannot rewind the
                 # exchange clock after a newer event has already been seen.
                 if last_exchange_ts is not None and stamp < last_exchange_ts:
@@ -189,6 +192,10 @@ class MarketEventJournal:
                 latest_snapshot_received_ns = received_ns
                 applied += 1
                 continue
+            # Trades, tick-size changes and market lifecycle events are
+            # journaled for research but do not mutate the L2 book clock.
+            if event_type != "price_change" or not has_snapshot:
+                continue
             if last_exchange_ts is not None and stamp < last_exchange_ts:
                 # Deltas are state transitions. Applying a late older delta
                 # after a newer one would corrupt the reconstructed book.
@@ -201,6 +208,7 @@ class MarketEventJournal:
                 changes = payload.get("price_changes") or payload.get("changes") or []
                 if not isinstance(changes, list):
                     changes = []
+                asset_change_applied = False
                 for change in changes:
                     if not isinstance(change, dict):
                         continue
@@ -221,7 +229,9 @@ class MarketEventJournal:
                     else:
                         book_side[price] = size
                     applied += 1
-            last_exchange_ts = stamp if last_exchange_ts is None else max(last_exchange_ts, stamp)
+                    asset_change_applied = True
+                if asset_change_applied:
+                    last_exchange_ts = stamp if last_exchange_ts is None else max(last_exchange_ts, stamp)
         return {
             "asset_id": str(asset_id),
             "bids": [{"price": p, "size": bids[p]} for p in sorted(bids, reverse=True)],
