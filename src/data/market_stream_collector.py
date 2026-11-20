@@ -62,7 +62,15 @@ class MarketStreamCollector:
                     }))
                     logger.info("CLOB market stream connected; tokens=%d", len(self.token_ids))
                     heartbeat = asyncio.create_task(self._heartbeat(websocket))
-                    async for raw in websocket:
+                    backoff = self.base_backoff_seconds
+                    while not self.stop_event.is_set():
+                        # A live TCP socket is not proof that the application
+                        # heartbeat is healthy. Force reconnect if PONG/market
+                        # frames stop arriving despite our 10-second PINGs.
+                        try:
+                            raw = await asyncio.wait_for(websocket.recv(), timeout=25)
+                        except asyncio.TimeoutError as exc:
+                            raise ConnectionError("no WebSocket frame/PONG received within 25 seconds") from exc
                         try:
                             events = _decode_payload(raw)
                         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
