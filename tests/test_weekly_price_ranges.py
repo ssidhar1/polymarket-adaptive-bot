@@ -105,8 +105,11 @@ def test_scanner_emits_observation_only_candidate_without_inventing_fair_value()
     assert item.expected_net_edge_per_share is None
     assert "fair_value_unmodeled" in item.risk_flags
     assert "resolution_rules_unverified" in item.risk_flags
-    assert item.estimated_fees > 0
-    assert item.estimated_slippage > 0
+    # 0.07 * 0.80 * (1 - 0.80) = 0.0112 USDC/share.
+    # The fee helper already returns fee per share; do not multiply by ask again.
+    assert item.estimated_fees == Decimal("0.0112")
+    assert item.estimated_slippage == Decimal("0.0016")
+    assert item.metadata["fee_exponent"] == "1"
     assert item.metadata["observation_only"] is True
     assert session.calls[1][1] == {"token_id": "yes-token"}
 
