@@ -104,6 +104,16 @@ class MarketEventJournal:
                     "exchange_ts_ms": exchange_ts_ms, "received_ts_ns": received,
                     "payload_sha256": digest}
 
+    def book_update_times(self, asset_id):
+        """Return receive-time cutoffs containing possible book mutations."""
+        with self._connect() as db:
+            rows = db.execute("""SELECT DISTINCT received_ts_ns
+                FROM market_events
+                WHERE (asset_id=? OR asset_id='')
+                  AND event_type IN ('book','price_change')
+                ORDER BY received_ts_ns ASC""", (str(asset_id),)).fetchall()
+        return [int(row["received_ts_ns"]) for row in rows]
+
     def record_connection_gap(self, asset_ids, *, reason="websocket disconnected", received_ts_ns=None):
         """Record a feed interruption for each subscribed token."""
         received = int(received_ts_ns if received_ts_ns is not None else time.time_ns())
