@@ -35,6 +35,7 @@ class PaperExecutor:
         extra_slippage: float = 0.0,
         prefer_maker: bool = True,
         slippage_bps: float = 8.0,
+        max_slippage_bps: float = 100.0,
     ):
         self.fee_rate = max(0.0, min(0.25, _finite(fee_rate, 0.07)))
         self.extra_slippage = max(0.0, _finite(extra_slippage, 0.0))
@@ -42,6 +43,7 @@ class PaperExecutor:
         # the caller does not provide evidence of a resting maker fill.
         self.prefer_maker = bool(prefer_maker)
         self.slippage_bps = max(0.0, min(500.0, _finite(slippage_bps, 8.0)))
+        self.max_slippage_bps = max(0.0, min(5000.0, _finite(max_slippage_bps, 100.0)))
         self.open_orders = {}
         self.closed_trades = []
 
@@ -54,6 +56,7 @@ class PaperExecutor:
         market_id: str,
         already_aggressive: bool = True,
         fee_rate: Optional[float] = None,
+        book_asks: Optional[list] = None,
     ) -> Optional[Dict]:
         if not token_id or not market_id:
             logger.warning("PAPER SKIP | missing token_id or market_id")
@@ -70,19 +73,67 @@ class PaperExecutor:
             logger.warning(f"PAPER SKIP | price={requested} size={notional}")
             return None
 
-        # All current strategy calls are aggressive. Apply adverse slippage
-        # to both aggressive and unverified non-aggressive fills; never grant
-        # a passive fill or rebate without actual queue/fill evidence.
+        # All current strategy calls are aggressive. If the caller supplies
+        # the live ask ladder, consume actual displayed depth and reject a
+        # requested notional that cannot be filled inside the slippage budget.
         slip = max(self.extra_slippage, requested * self.slippage_bps / 10_000.0)
-        fill_price = requested + slip if side == "buy" else requested - slip
-        if not (0.0 < fill_price < 1.0):
-            logger.warning(
-                "PAPER SKIP | slippage pushes fill outside binary price range "
-                f"(requested={requested:.4f}, slip={slip:.5f})"
-            )
-            return None
+        if side == "buy" and book_asks is not None:
+            remaining = notional
+            shares = 0.0
+            spent = 0.0
+            valid_levels = []
+            for level in book_asks:
+                try:
+                    level_price = float(level.get("price")) if isinstance(level, dict) else float(level[0])
+                    level_size = float(level.get("size")) if isinstance(level, dict) else float(level[1])
+                except (TypeError, ValueError, IndexError, AttributeError):
+                    continue
+                if 0 < level_price < 1 and math.isfinite(level_size) and level_size > 0:
+                    valid_levels.append((level_price, level_size))
+            valid_levels.sort(key=lambda item: item[0])
+            if not valid_levels or abs(valid_levels[0][0] - requested) > 1e-6:
+                logger.warning("PAPER SKIP | supplied ask ladder does not match requested best ask")
+                return None
+            for level_price, level_size in valid_levels:
+                adjusted = level_price + max(self.extra_slippage, level_price * self.slippage_bps / 10_000.0)
+                if not 0 < adjusted < 1:
+                    continue
+                capacity = level_size * adjusted
+                spend = min(remaining, capacity)
+                if spend <= 0:
+                    continue
+                shares += spend / adjusted
+                spent += spend
+                remaining -= spend
+                if remaining <= max(1e-8, notional * 1e-8):
+                    remaining = 0.0
+                    break
+            if remaining > max(1e-6, notional * 1e-6) or shares <= 0:
+                logger.warning(
+                    "PAPER SKIP | insufficient executable ask depth | requested=$%.2f unfilled=$%.2f",
+                    notional, remaining,
+                )
+                return None
+            fill_price = spent / shares
+            slip = fill_price - requested
+            realized_slippage_bps = slip / requested * 10_000.0
+            if realized_slippage_bps > self.max_slippage_bps:
+                logger.warning(
+                    "PAPER SKIP | book-walk slippage %.1f bps exceeds %.1f bps cap",
+                    realized_slippage_bps, self.max_slippage_bps,
+                )
+                return None
+            notional = spent
+        else:
+            fill_price = requested + slip if side == "buy" else requested - slip
+            if not (0.0 < fill_price < 1.0):
+                logger.warning(
+                    "PAPER SKIP | slippage pushes fill outside binary price range "
+                    f"(requested={requested:.4f}, slip={slip:.5f})"
+                )
+                return None
+            shares = notional / fill_price
 
-        shares = notional / fill_price
         if shares <= 0 or not math.isfinite(shares):
             logger.warning("PAPER SKIP | non-finite shares")
             return None
