@@ -29,10 +29,12 @@ def test_microstructure_ofi_detects_bid_addition_and_ask_withdrawal():
         "asks": [{"price": "0.51", "size": "5"}],
     }
     features = compute_microstructure_features(current, previous)
-    assert features["ofi"] == pytest.approx(10)
-    assert features["ofi_normalized"] == pytest.approx(0.5)
-    assert features["ask_withdrawal_fraction"] == pytest.approx(0.5)
-    assert features["withdrawal_imbalance"] > 0
+    assert features["ofi"] == pytest.approx(20)
+    assert features["ofi_normalized"] == pytest.approx(1.0)
+    assert features["depth_delta"] == pytest.approx(10)
+    assert features["depth_delta_normalized"] == pytest.approx(0.5)
+    assert features["ask_depth_disappearance_fraction"] == pytest.approx(0.5)
+    assert features["depth_disappearance_imbalance"] < 0
 
 
 def test_microstructure_refuses_incomplete_or_crossed_books():
