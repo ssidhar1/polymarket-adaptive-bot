@@ -76,6 +76,8 @@ def generate_microstructure_decisions(
                 "notional_usd": float(notional_usd),
                 "fee_rate": float(schedule.get("rate", default_fee_rate)),
                 "fee_exponent": float(schedule.get("exponent", default_fee_exponent)),
+                "fee_source": schedule.get("source", "config_fallback"),
+                "fee_verified": bool(schedule.get("verified", False)),
                 "signal": "positive_ofi_microprice_confirmation",
                 "signal_features": features,
             }
@@ -141,8 +143,15 @@ def main():
 
     from src.data.market_event_journal import MarketEventJournal
     journal = MarketEventJournal(args.db)
+    tokens = [token.strip() for token in args.tokens.split(",") if token.strip()]
+    from src.data.polymarket_client import PolymarketData
+    data = PolymarketData()
+    fee_schedules = {
+        token: data.get_fee_schedule(token, default_rate=args.fee_rate)
+        for token in tokens
+    }
     result = run_microstructure_research(
-        journal, [token.strip() for token in args.tokens.split(",") if token.strip()],
+        journal, tokens, fee_schedules=fee_schedules,
         notional_usd=args.notional,
         min_ofi_normalized=args.min_ofi,
         min_microprice_edge_bps=args.min_microprice_bps,
