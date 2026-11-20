@@ -37,6 +37,7 @@ class OpenPosition:
     trade_type: str = "dir"
     fee_rate: float = 0.07
     fee_exponent: float = 1.0
+    fee_collection: str = "usdc"
 
 
 class PositionTracker:
@@ -83,6 +84,7 @@ class PositionTracker:
             trade_type=str(meta.get("trade_type") or "dir"),
             fee_rate=float(order.get("fee_rate", 0.07)),
             fee_exponent=float(order.get("fee_exponent", 1.0)),
+            fee_collection=str(order.get("fee_collection", "usdc")),
         )
         self.open[order["order_id"]] = pos
         logger.info(
@@ -255,6 +257,7 @@ class PositionTracker:
                 "trade_type": pos.trade_type,
                 "fee_rate": pos.fee_rate,
                 "fee_exponent": pos.fee_exponent,
+                "fee_collection": pos.fee_collection,
             })
         return out
 
@@ -296,6 +299,7 @@ class PositionTracker:
                     trade_type=str(r.get("trade_type") or "dir"),
                     fee_rate=float(r.get("fee_rate", 0.07)),
                     fee_exponent=float(r.get("fee_exponent", 1.0)),
+                    fee_collection=str(r.get("fee_collection", "usdc")),
                 )
                 self.open[pos.order_id] = pos
                 restored += 1
