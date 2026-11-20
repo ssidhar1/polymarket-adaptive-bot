@@ -127,9 +127,10 @@ class PolymarketData:
                          default_rate: float = 0.07) -> Dict[str, Any]:
         """Resolve the public CLOB fee coefficient for this market/token.
 
-        Prefer CLOB market metadata (fd.r); fall back to the token fee-rate
-        endpoint (base_fee is basis points). Never interpret a valid zero rate
-        as missing. Cache both verified and fallback values briefly.
+        Prefer CLOB V2 market metadata (fd.r / fd.e). The legacy /fee-rate
+        endpoint can return a generic base_fee and is not trusted for V2.
+        Never interpret a valid zero rate as missing. Cache verified and
+        explicitly unverified fallback values briefly.
         """
         token = str(token_id or "").strip()
         condition = str(condition_id or "").strip()
@@ -161,20 +162,10 @@ class PolymarketData:
             except Exception as exc:
                 logger.debug("CLOB market fee metadata unavailable for %s: %s", condition, exc)
 
-        if value is None and token:
-            try:
-                response = self._get(f"{CLOB}/fee-rate", params={"token_id": token}, timeout=6)
-                response.raise_for_status()
-                payload = response.json() or {}
-                if "base_fee" in payload and payload["base_fee"] is not None:
-                    rate = float(payload["base_fee"]) / 10_000.0
-                    if math.isfinite(rate) and 0 <= rate <= 0.25:
-                        value = {
-                            "rate": rate, "exponent": 1.0, "collection": "usdc",
-                            "source": "clob_fee_rate_bps", "verified": True,
-                        }
-            except Exception as exc:
-                logger.debug("CLOB token fee-rate unavailable for %s: %s", token, exc)
+        # Do not use the legacy /fee-rate endpoint for CLOB V2. It can
+        # return a generic base_fee rather than the market's dynamic fd.r.
+        # If V2 market info is unavailable, keep the configured fallback
+        # explicitly unverified instead of inventing a category rate.
 
         if value is None:
             value = {
