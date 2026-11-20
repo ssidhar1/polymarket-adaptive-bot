@@ -59,3 +59,53 @@ def test_up_side_aligned():
     sig = ens.directional_score(feat, preferred_side="up")
     assert sig["direction"] == "up"
     assert sig.get("components", {}).get("imbalance", 0) > 0
+
+
+def test_uncalibrated_probability_proxy_never_becomes_tradeable_by_default():
+    ens = EnsembleSignal(_cfg())
+    feat = {
+        "momentum": 0.8,
+        "vs_open": 0.8,
+        "book_imbalance": 0.8,
+        "microprice_delta": 0.8,
+        "time_remaining_pct": 0.3,
+        "time_remaining_s": 90,
+        "volatility_regime": "normal",
+        "mid_price": 0.30,
+        "ask_price": 0.30,
+        "spread": 0.005,
+        "depth_usd": 1000.0,
+        "window_seconds": 300,
+        "side": "up",
+    }
+    sig = ens.directional_score(feat, preferred_side="up")
+    assert sig["pass"] is False
+    assert sig["reason"] == "uncalibrated_probability"
+    assert sig["est_prob"] is None
+    assert sig["edge_after_fees"] is None
+    assert sig["probability_kind"] == "uncalibrated_heuristic_proxy"
+
+
+def test_explicit_heuristic_paper_probe_is_labeled_and_capped_by_risk_path():
+    cfg = _cfg()
+    cfg["signals"]["allow_heuristic_paper_entries"] = True
+    ens = EnsembleSignal(cfg)
+    feat = {
+        "momentum": 0.8,
+        "vs_open": 0.8,
+        "book_imbalance": 0.8,
+        "microprice_delta": 0.8,
+        "time_remaining_pct": 0.3,
+        "time_remaining_s": 90,
+        "volatility_regime": "normal",
+        "mid_price": 0.30,
+        "ask_price": 0.30,
+        "spread": 0.005,
+        "depth_usd": 1000.0,
+        "window_seconds": 300,
+        "side": "up",
+    }
+    sig = ens.directional_score(feat, preferred_side="up")
+    assert sig["pass"] is True
+    assert sig["paper_probe"] is True
+    assert sig["probability_kind"] == "uncalibrated_heuristic_proxy"
