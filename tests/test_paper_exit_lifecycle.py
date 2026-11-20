@@ -141,7 +141,7 @@ def test_legacy_share_mode_reduces_settlement_quantity_without_double_charging(t
     assert settled["entry_fees_usd"] == pytest.approx(.35)
 
 
-def test_legacy_entry_fee_rows_are_backfilled_to_fee_shares(tmp_path):
+def test_legacy_entry_fee_rows_migrate_as_v2_usdc_fees(tmp_path):
     import sqlite3
 
     path = tmp_path / "legacy.db"
@@ -175,3 +175,41 @@ def test_legacy_entry_fee_rows_are_backfilled_to_fee_shares(tmp_path):
     assert pos["remaining_quantity"] == pytest.approx(20.0)
     assert pos["average_entry_price"] == pytest.approx(10.35 / 20.0)
     assert pos["entry_cash_fees_usd"] == pytest.approx(.35)
+
+
+
+def test_interim_share_fee_rows_keep_legacy_mode_during_migration(tmp_path):
+    import sqlite3
+
+    path = tmp_path / "interim-share.db"
+    db = sqlite3.connect(path)
+    db.executescript("""
+        CREATE TABLE paper_positions (
+            position_id TEXT PRIMARY KEY, token_id TEXT NOT NULL,
+            market_id TEXT NOT NULL, direction TEXT NOT NULL,
+            opened_at TEXT NOT NULL, metadata_json TEXT NOT NULL
+        );
+        CREATE TABLE paper_fill_events (
+            event_id TEXT PRIMARY KEY,
+            position_id TEXT NOT NULL REFERENCES paper_positions(position_id),
+            side TEXT NOT NULL CHECK(side IN ('BUY','SELL')),
+            quantity REAL NOT NULL CHECK(quantity > 0),
+            price REAL NOT NULL CHECK(price > 0 AND price < 1),
+            fee_usd REAL NOT NULL CHECK(fee_usd >= 0),
+            fee_shares REAL NOT NULL DEFAULT 0,
+            gross_pnl_usd REAL, entry_fee_allocated_usd REAL, net_pnl_usd REAL,
+            created_at TEXT NOT NULL
+        );
+        INSERT INTO paper_positions VALUES('old-share','t','m','up','2026-11-20T00:00:00+00:00','{}');
+        INSERT INTO paper_fill_events(event_id,position_id,side,quantity,price,fee_usd,fee_shares,created_at)
+        VALUES('old-share-buy','old-share','BUY',20,0.5,0.35,0.70,'2026-11-20T00:00:00+00:00');
+    """)
+    db.commit()
+    db.close()
+
+    ledger = PaperExitLifecycle(path)
+    pos = ledger.get_position("old-share")
+    assert pos["entry_fee_shares"] == pytest.approx(.70)
+    assert pos["entry_cash_fees_usd"] == pytest.approx(0.0)
+    assert pos["remaining_quantity"] == pytest.approx(19.30)
+    assert pos["average_entry_price"] == pytest.approx(10 / 19.30)
