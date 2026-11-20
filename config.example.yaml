@@ -30,6 +30,9 @@ signals:
   min_time_remaining_pct: 0.06
   max_time_remaining_pct: 0.99
   max_prob_lift: 0.04
+  # Diagnostic heuristic lifts are not calibrated fair values.
+  # Keep false until a calibrated, event-time model is connected.
+  allow_heuristic_paper_entries: false
 
 learning:
   calibration_window: 100
