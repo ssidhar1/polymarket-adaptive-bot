@@ -6,21 +6,25 @@ not a percentage of dollar notional. Buy-side fees may be collected in shares;
 the ledger stores their USDC value at execution for consistent P&L accounting.
 """
 from typing import Optional
+import math
 
 
 def taker_fee_rate(price: float, rate: float = 0.07, exponent: int = 1) -> float:
     """Return the USDC-equivalent fee per share at the execution price."""
     p = float(price)
-    if p <= 0.0 or p >= 1.0:
+    coefficient = float(rate)
+    if not math.isfinite(p) or not math.isfinite(coefficient) or p <= 0.0 or p >= 1.0:
         return 0.0
     exp = max(1, int(exponent))
-    return max(0.0, float(rate)) * (p ** exp) * ((1.0 - p) ** exp)
+    return max(0.0, coefficient) * (p ** exp) * ((1.0 - p) ** exp)
 
 
 def taker_fee_usd(shares: float, price: float, rate: float = 0.07,
-                  exponent: int = 1, min_fee: float = 0.00001) -> float:
+                  exponent: int = 1) -> float:
     """Calculate fee in USDC, rounded to 5 decimals; sub-increment fees round to zero."""
-    quantity = max(0.0, float(shares))
+    quantity = float(shares)
+    if not math.isfinite(quantity) or quantity <= 0:
+        return 0.0
     raw = quantity * taker_fee_rate(price, rate=rate, exponent=exponent)
     if raw <= 0.0:
         return 0.0
@@ -32,9 +36,10 @@ def taker_fee_usd(shares: float, price: float, rate: float = 0.07,
 def fee_on_notional(notional_usd: float, price: float, rate: float = 0.07) -> float:
     """Calculate fee from dollar notional by converting notional to shares."""
     p = float(price)
-    if p <= 0.0 or p >= 1.0:
+    notional = float(notional_usd)
+    if not math.isfinite(p) or not math.isfinite(notional) or p <= 0.0 or p >= 1.0 or notional <= 0:
         return 0.0
-    return taker_fee_usd(float(notional_usd) / p, p, rate=rate)
+    return taker_fee_usd(notional / p, p, rate=rate)
 
 
 def edge_after_taker_fee(est_prob: float, entry: float, rate: float = 0.07) -> float:
