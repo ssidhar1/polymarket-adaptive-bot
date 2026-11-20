@@ -11,7 +11,7 @@ import logging
 import math
 import uuid
 
-from src.utils.fees import taker_fee_rate, taker_fee_usd
+from src.utils.fees import taker_fee_usd
 
 logger = logging.getLogger("astf.execution.paper")
 
