@@ -155,7 +155,7 @@ class PolymarketData:
                         if (math.isfinite(rate) and math.isfinite(exponent)
                                 and 0 <= rate <= 0.25 and 0 < exponent <= 4):
                             value = {
-                                "rate": rate, "exponent": exponent,
+                                "rate": rate, "exponent": exponent, "collection": "usdc",
                                 "source": "clob_market_info", "verified": True,
                             }
             except Exception as exc:
@@ -170,7 +170,7 @@ class PolymarketData:
                     rate = float(payload["base_fee"]) / 10_000.0
                     if math.isfinite(rate) and 0 <= rate <= 0.25:
                         value = {
-                            "rate": rate, "exponent": 1.0,
+                            "rate": rate, "exponent": 1.0, "collection": "usdc",
                             "source": "clob_fee_rate_bps", "verified": True,
                         }
             except Exception as exc:
