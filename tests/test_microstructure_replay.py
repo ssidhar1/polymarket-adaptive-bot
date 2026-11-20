@@ -16,7 +16,7 @@ def _journal(path):
         "event_type": "price_change", "asset_id": "token", "timestamp": 1100,
         "price_changes": [
             {"asset_id": "token", "price": "0.49", "size": "30", "side": "BUY"},
-            {"asset_id": "token", "price": "0.51", "size": "5", "side": "SELL"},
+            {"asset_id": "token", "price": "0.51", "size": "20", "side": "SELL"},
         ],
     }, received_ts_ns=200)
     return journal
