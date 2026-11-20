@@ -62,3 +62,14 @@ def test_walk_forward_rejects_lookahead_and_duplicate_market_rows():
         walk_forward_evaluate([invalid], min_train=1, test_size=1)
     with pytest.raises(ValueError):
         walk_forward_evaluate([row, row], min_train=1, test_size=1)
+
+
+def test_walk_forward_rejects_mixed_strategy_rows():
+    first = _record(0, True)
+    second = ForecastOutcome(
+        strategy="astf", market_id="other", observed_at=first.observed_at + timedelta(hours=1),
+        resolution_at=first.resolution_at + timedelta(hours=1), probability_yes=0.8,
+        entry_price=0.7, outcome_yes=True, fees_per_share=0.01, slippage_per_share=0.01,
+    )
+    with pytest.raises(ValueError, match="one strategy"):
+        walk_forward_evaluate([first, second], min_train=1, test_size=1)
