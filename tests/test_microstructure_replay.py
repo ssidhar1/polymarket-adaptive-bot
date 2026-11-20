@@ -67,5 +67,7 @@ def test_disconnect_resets_previous_book_so_ofi_does_not_bridge_gap(tmp_path):
         journal, ["token"], min_ofi_normalized=.15,
         min_microprice_edge_bps=1, max_spread_bps=500,
     )
-    # The post-gap snapshot is a new baseline; no cross-gap OFI is inferred.
-    assert generated["decisions"] == []
+    # The pre-gap signal remains valid. The fresh post-gap snapshot is a new
+    # baseline and must not create a second signal from pre-gap OFI.
+    assert len(generated["decisions"]) == 1
+    assert generated["decisions"][0]["decision_received_ns"] == 200
