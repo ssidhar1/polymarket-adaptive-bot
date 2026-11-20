@@ -13,20 +13,63 @@ logger = logging.getLogger("astf.resolution")
 GAMMA = "https://gamma-api.polymarket.com"
 
 
-def _parse_outcome_prices(raw: Any) -> Tuple[Optional[float], Optional[float]]:
-    if raw is None:
+def _parse_labeled_outcome_prices(outcomes_raw: Any, prices_raw: Any) -> Tuple[Optional[float], Optional[float]]:
+    """Map final prices by outcome label, never by array position."""
+    def _array(raw):
+        if isinstance(raw, str):
+            try:
+                raw = json.loads(raw)
+            except (TypeError, ValueError):
+                return None
+        return raw if isinstance(raw, list) else None
+
+    outcomes, prices = _array(outcomes_raw), _array(prices_raw)
+    if outcomes is None or prices is None or len(outcomes) != len(prices):
         return None, None
-    if isinstance(raw, str):
-        try:
-            raw = json.loads(raw)
-        except Exception:
+    up_idx = [i for i, x in enumerate(outcomes) if str(x).strip().casefold() in {"up", "yes"}]
+    down_idx = [i for i, x in enumerate(outcomes) if str(x).strip().casefold() in {"down", "no"}]
+    if len(up_idx) != 1 or len(down_idx) != 1 or up_idx[0] == down_idx[0]:
+        return None, None
+    try:
+        up_p, down_p = float(prices[up_idx[0]]), float(prices[down_idx[0]])
+    except (TypeError, ValueError, IndexError):
+        return None, None
+    if not (0 <= up_p <= 1 and 0 <= down_p <= 1):
+        return None, None
+    return up_p, down_p
+
+
+def _parse_labeled_tokens(tokens: Any) -> Tuple[Optional[float], Optional[float]]:
+    if not isinstance(tokens, list) or len(tokens) < 2:
+        return None, None
+    mapped = {}
+    for token in tokens:
+        if not isinstance(token, dict):
+            continue
+        label = str(token.get("outcome") or token.get("name") or "").strip().casefold()
+        if label in {"up", "yes"}:
+            key = "up"
+        elif label in {"down", "no"}:
+            key = "down"
+        else:
+            continue
+        if key in mapped:
             return None, None
-    if isinstance(raw, list) and len(raw) >= 2:
         try:
-            return float(raw[0]), float(raw[1])
+            if token.get("winner") is True:
+                mapped[key] = 1.0
+            elif token.get("winner") is False and token.get("price") is None:
+                mapped[key] = 0.0
+            elif token.get("price") is not None:
+                mapped[key] = float(token["price"])
         except (TypeError, ValueError):
             return None, None
-    return None, None
+    if set(mapped) != {"up", "down"}:
+        return None, None
+    up_p, down_p = mapped["up"], mapped["down"]
+    if not (0 <= up_p <= 1 and 0 <= down_p <= 1):
+        return None, None
+    return up_p, down_p
 
 
 def _decisive(up_p: Optional[float], down_p: Optional[float]) -> bool:
@@ -40,22 +83,11 @@ def _extract_from_market(m: Dict) -> Tuple[bool, Optional[float], Optional[float
     if m.get("umaResolutionStatus") in ("resolved", "resolved_yes", "resolved_no"):
         flagged_closed = True
 
-    up_p, down_p = _parse_outcome_prices(m.get("outcomePrices"))
-
-    tokens = m.get("tokens")
-    if isinstance(tokens, list) and len(tokens) >= 2 and (up_p is None or down_p is None):
-        try:
-            t0, t1 = tokens[0], tokens[1]
-            if isinstance(t0, dict):
-                if t0.get("winner") is True:
-                    up_p, down_p = 1.0, 0.0
-                elif t1.get("winner") is True:
-                    up_p, down_p = 0.0, 1.0
-                elif t0.get("price") is not None:
-                    up_p = float(t0.get("price"))
-                    down_p = float(t1.get("price", 1.0 - up_p))
-        except Exception:
-            pass
+    up_p, down_p = _parse_labeled_outcome_prices(
+        m.get("outcomes"), m.get("outcomePrices")
+    )
+    if up_p is None or down_p is None:
+        up_p, down_p = _parse_labeled_tokens(m.get("tokens"))
 
     # Only report closed=True when we can settle cleanly
     if _decisive(up_p, down_p):
