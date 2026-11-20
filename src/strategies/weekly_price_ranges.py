@@ -205,16 +205,25 @@ class WeeklyPriceRangeScanner:
                 except ValueError:
                     fee_schedule = {}
             fee_rate = _decimal((fee_schedule or {}).get("rate")) if isinstance(fee_schedule, dict) else None
+            fee_exponent = _decimal(
+                (fee_schedule or {}).get("exponent", (fee_schedule or {}).get("e", 1))
+            ) if isinstance(fee_schedule, dict) else Decimal("1")
             flags = [
                 "fair_value_unmodeled",
                 "resolution_rules_unverified",
                 "book_source_timestamp_unverified",
             ]
-            if fee_rate is None:
+            if fee_rate is None or not Decimal("0") <= fee_rate <= Decimal("0.25"):
                 fee_rate = self.default_fee_rate
                 flags.append("fee_schedule_defaulted")
-            fee_fraction = Decimal(str(taker_fee_rate(float(ask), rate=float(fee_rate))))
-            fee_per_share = ask * fee_fraction
+            if fee_exponent is None or not Decimal("0") < fee_exponent <= Decimal("4"):
+                fee_exponent = Decimal("1")
+                flags.append("fee_exponent_defaulted")
+            # taker_fee_rate already returns USDC fee per share. Multiplying
+            # by ask again would understate fees by a factor of the share price.
+            fee_per_share = Decimal(str(taker_fee_rate(
+                float(ask), rate=float(fee_rate), exponent=float(fee_exponent)
+            )))
             slippage_per_share = ask * self.slippage_bps / Decimal("10000")
             question = str(market.get("question") or "")
             opportunities.append(Opportunity(
@@ -236,6 +245,7 @@ class WeeklyPriceRangeScanner:
                     "slug": market.get("slug"),
                     "outcomes": _parse_array(market.get("outcomes")),
                     "fee_rate": str(fee_rate),
+                    "fee_exponent": str(fee_exponent),
                     "fee_source": "gamma_fee_schedule" if "fee_schedule_defaulted" not in flags else "conservative_config_fallback",
                     "book_depth_usd_top5": str(depth_usd),
                     "source": "gamma_api+clob_api",
