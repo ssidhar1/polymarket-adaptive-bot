@@ -90,3 +90,7 @@ Paper mode only. The dormant live adapter remains disconnected and `run_live()` 
 - It is not a drop-in Polymarket engine: its primary model is bar-based instruments and portfolio simulation, while this repository needs token-level binary CLOB books, queue/depth, partial fills, fees and authoritative resolution. Do not replace our paper ledger or install it as a runtime dependency yet.
 - Compatibility: Ziplime requires Python 3.12+, while this repository's runtime/deployment dependency set has not been verified against that baseline. Its GitHub README advertises AGPL-3.0 with an additional permission, while the GitHub repository API and checked-in LICENSE identify GPL-3.0. PyPI metadata and source-tree licensing should be reconciled with the maintainer before adopting or redistributing it. No package has been installed and no new dependency was added.
 - Best use: optionally run it in an isolated research environment to evaluate bar-derived BTC/ETH spot features or compare causal signal calculations. Keep a custom event-driven CLOB replay as the authoritative Polymarket simulator.
+
+
+### Additional audit: settlement label mapping
+- The resolution checker previously interpreted `outcomePrices[0]` as UP and `outcomePrices[1]` as DOWN, and had a token-winner fallback that also assumed array order. It now maps both outcome prices and token winner records by explicit Up/Down or Yes/No labels. Missing or ambiguous labels fail closed rather than settling a potentially reversed position.
