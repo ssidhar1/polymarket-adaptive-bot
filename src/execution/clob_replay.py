@@ -19,7 +19,7 @@ class CLOBReplayEngine:
     def __init__(self, journal, *, decision_latency_ms=250,
                  max_book_age_ms=2000, slippage_bps=8,
                  max_slippage_bps=30, default_fee_rate=0.07,
-                 default_fee_exponent=1.0):
+                 default_fee_exponent=1.0, default_fee_collection="usdc"):
         self.journal = journal
         self.latency_ns = max(0, int(float(decision_latency_ms) * 1_000_000))
         self.max_book_age_ns = max(0, int(float(max_book_age_ms) * 1_000_000))
@@ -27,6 +27,9 @@ class CLOBReplayEngine:
         self.max_slippage_bps = max(0.0, float(max_slippage_bps))
         self.default_fee_rate = max(0.0, float(default_fee_rate))
         self.default_fee_exponent = max(0.1, float(default_fee_exponent))
+        self.default_fee_collection = str(default_fee_collection or "usdc").lower()
+        if self.default_fee_collection not in ("usdc", "shares"):
+            raise ValueError("default_fee_collection must be 'usdc' or 'shares'")
 
     def _book_at(self, token_id, received_before_ns):
         book = self.journal.replay_book(
@@ -107,6 +110,7 @@ class CLOBReplayEngine:
                 ask = float(asks[0]["price"])
                 fee_rate = float(intent.get("fee_rate", self.default_fee_rate))
                 fee_exponent = float(intent.get("fee_exponent", self.default_fee_exponent))
+                fee_collection = str(intent.get("fee_collection", self.default_fee_collection)).lower()
             except (TypeError, ValueError, KeyError):
                 rejections.append({
                     "index": index, "decision_id": intent.get("decision_id"),
@@ -116,13 +120,14 @@ class CLOBReplayEngine:
 
             executor = PaperExecutor(
                 fee_rate=fee_rate, fee_exponent=fee_exponent,
+                fee_collection=fee_collection,
                 slippage_bps=self.slippage_bps,
                 max_slippage_bps=self.max_slippage_bps,
             )
             order = executor.place_order(
                 token_id, "buy", ask, notional, market_id,
                 fee_rate=fee_rate, fee_exponent=fee_exponent,
-                book_asks=asks,
+                fee_collection=fee_collection, book_asks=asks,
             )
             if order is None:
                 rejections.append({
