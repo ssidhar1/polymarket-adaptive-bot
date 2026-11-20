@@ -102,8 +102,14 @@ helper reconstructs L2 books from a full `book` snapshot plus subsequent
 handles multi-token delta batches, and marks books incomplete if a late older
 delta arrives after a newer event.
 
-This is a storage/replay primitive, **not yet a connected WebSocket collector or
-runtime signal source**. The next integration step is a reconnecting public market
-channel consumer that subscribes to token IDs, journals every raw event, records
-connection gaps, and requires a fresh snapshot after reconnect before a book can
-be considered complete. Until then, do not claim historical CLOB replay coverage.
+A separate public-channel collector is available:
+```bash
+python -m src.data.market_stream_collector --tokens TOKEN_ID_1,TOKEN_ID_2 --db data/clob_events.sqlite
+```
+It sends the documented subscription and application heartbeat, journals raw events,
+and records a connection gap after disconnect. Replay invalidates the book across
+that gap until a new full snapshot arrives. Historical exchange-time replay requires
+a local receive-time cutoff as well, preventing late-arriving data from leaking into
+the simulated decision. The collector is an optional data process; it is **not yet
+wired into ASTF's runtime signal loop**, and no collected dataset or performance
+claim exists yet.
