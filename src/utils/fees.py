@@ -49,10 +49,36 @@ def edge_after_taker_fee(est_prob: float, entry: float, rate: float = 0.07) -> f
 
 
 def parse_fee_schedule(market: Optional[dict], default_rate: float = 0.07) -> float:
-    if not market:
+    if not isinstance(market, dict):
         return default_rate
+    if market.get("_fee_rate") is not None:
+        try:
+            rate = float(market["_fee_rate"])
+            if math.isfinite(rate) and 0 <= rate <= 0.25:
+                return rate
+        except (TypeError, ValueError):
+            pass
+    if market.get("feesEnabled") is False:
+        return 0.0
     fs = market.get("feeSchedule") or {}
+    if isinstance(fs, dict):
+        try:
+            rate = float(fs.get("rate", default_rate))
+            return rate if math.isfinite(rate) and 0 <= rate <= 0.25 else default_rate
+        except (TypeError, ValueError):
+            pass
+    return default_rate
+
+
+def parse_fee_exponent(market: Optional[dict], default_exponent: float = 1.0) -> float:
+    if not isinstance(market, dict):
+        return default_exponent
+    raw = market.get("_fee_exponent")
+    if raw is None:
+        fs = market.get("feeSchedule") or {}
+        raw = fs.get("exponent", default_exponent) if isinstance(fs, dict) else default_exponent
     try:
-        return float(fs.get("rate", default_rate))
+        exponent = float(raw)
+        return exponent if math.isfinite(exponent) and 0 < exponent <= 4 else default_exponent
     except (TypeError, ValueError):
-        return default_rate
+        return default_exponent
