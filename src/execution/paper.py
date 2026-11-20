@@ -37,6 +37,7 @@ class PaperExecutor:
         prefer_maker: bool = True,
         slippage_bps: float = 8.0,
         max_slippage_bps: float = 100.0,
+        fee_collection: str = "usdc",
     ):
         self.fee_rate = max(0.0, min(0.25, _finite(fee_rate, 0.07)))
         self.fee_exponent = max(0.1, min(4.0, _finite(fee_exponent, 1.0)))
@@ -46,6 +47,9 @@ class PaperExecutor:
         self.prefer_maker = bool(prefer_maker)
         self.slippage_bps = max(0.0, min(500.0, _finite(slippage_bps, 8.0)))
         self.max_slippage_bps = max(0.0, min(5000.0, _finite(max_slippage_bps, 100.0)))
+        self.fee_collection = str(fee_collection or "usdc").lower()
+        if self.fee_collection not in ("usdc", "shares"):
+            raise ValueError("fee_collection must be 'usdc' or 'shares'")
         self.open_orders = {}
         self.closed_trades = []
 
@@ -59,6 +63,7 @@ class PaperExecutor:
         already_aggressive: bool = True,
         fee_rate: Optional[float] = None,
         fee_exponent: Optional[float] = None,
+        fee_collection: Optional[str] = None,
         book_asks: Optional[list] = None,
     ) -> Optional[Dict]:
         if not token_id or not market_id:
@@ -77,6 +82,10 @@ class PaperExecutor:
             return None
 
         effective_fee_exponent = self.fee_exponent if fee_exponent is None else max(0.1, min(4.0, _finite(fee_exponent, self.fee_exponent)))
+        effective_fee_collection = self.fee_collection if fee_collection is None else str(fee_collection).lower()
+        if effective_fee_collection not in ("usdc", "shares"):
+            logger.warning("PAPER SKIP | invalid fee collection mode")
+            return None
 
         # All current strategy calls are aggressive. If the caller supplies
         # the live ask ladder, consume actual displayed depth and reject a
@@ -112,7 +121,7 @@ class PaperExecutor:
                     continue
                 level_shares = spend / adjusted
                 shares += level_shares
-                # Polymarket's fee curve is price-dependent. Applying the fee
+                                # Polymarket's fee curve is price-dependent. Applying the fee
                 # once at VWAP is not equivalent when a fill walks multiple
                 # price levels, so calculate each level's fee independently.
                 level_fee = taker_fee_usd(
@@ -162,18 +171,25 @@ class PaperExecutor:
         fee = ladder_fee if ladder_fee is not None else taker_fee_usd(
             shares, fill_price, rate=effective_fee_rate, exponent=effective_fee_exponent
         )
-        # On Polymarket.com, BUY taker fees are deducted in shares; SELL
-        # taker fees are deducted in USDC. Keep gross and net share quantities
-        # separate so the ledger can audit the fee and settle only received shares.
-        fee_shares = (
-            ladder_fee_shares if ladder_fee is not None
-            else (fee / fill_price if side == "buy" and fill_price > 0 else 0.0)
-        )
+        # CLOB V2 charges fees in USDC at match time. Retain legacy share
+        # collection as an explicit compatibility mode for V1-era records.
+        fee_shares = 0.0
+        if side == "buy" and effective_fee_collection == "shares":
+            fee_shares = (
+                ladder_fee_shares if ladder_fee is not None
+                else (fee / fill_price if fill_price > 0 else 0.0)
+            )
         net_shares = shares - fee_shares if side == "buy" else shares
         if net_shares <= 0 or not math.isfinite(net_shares):
             logger.warning("PAPER SKIP | buy fee consumes all received shares")
             return None
-        effective_entry_price = notional / net_shares if side == "buy" else fill_price
+        if side == "buy":
+            effective_entry_price = (
+                (notional + fee) / shares if effective_fee_collection == "usdc"
+                else notional / net_shares
+            )
+        else:
+            effective_entry_price = fill_price
         residual_fee_usd = 0.0 if side == "buy" else fee
         fee_frac = fee / notional if notional > 0 else 0.0
         order_id = str(uuid.uuid4())[:8]
@@ -197,6 +213,7 @@ class PaperExecutor:
             "fee_frac": fee_frac,
             "fee_rate": effective_fee_rate,
             "fee_exponent": effective_fee_exponent,
+            "fee_collection": effective_fee_collection,
             "maker": False,
             "execution_type": "taker",
             "status": "filled",
