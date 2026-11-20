@@ -113,3 +113,15 @@ a local receive-time cutoff as well, preventing late-arriving data from leaking 
 the simulated decision. The collector is an optional data process; it is **not yet
 wired into ASTF's runtime signal loop**, and no collected dataset or performance
 claim exists yet.
+
+
+## Fee model correction
+
+The paper fee helper now follows Polymarket's published share-based formula:
+`fee_usd = shares × fee_rate × price × (1 - price)`. Do not multiply the
+price-dependent fee-per-share term by dollar notional directly. The helper
+`taker_fee_usd` applies five-decimal precision and the documented minimum fee;
+`fee_on_notional` first converts notional to shares. Both entry fills and
+partial exits use this calculation. The fee is recorded as a USDC-equivalent
+execution expense for the paper ledger. Fee schedules remain market-specific
+and must be sourced from market metadata rather than assumed constant.
