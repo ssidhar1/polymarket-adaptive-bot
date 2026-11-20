@@ -156,6 +156,9 @@ def main():
         token: data.get_fee_schedule(token, default_rate=args.fee_rate)
         for token in tokens
     }
+    if args.fee_collection == "shares":
+        for schedule in fee_schedules.values():
+            schedule["collection"] = "shares"
     result = run_microstructure_research(
         journal, tokens, fee_schedules=fee_schedules,
         notional_usd=args.notional,
