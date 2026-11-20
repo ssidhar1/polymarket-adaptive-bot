@@ -25,6 +25,7 @@ def generate_microstructure_decisions(
     cooldown_ms=1000,
     default_fee_rate=0.07,
     default_fee_exponent=1.0,
+    default_fee_collection="usdc",
 ):
     market_ids = market_ids or {}
     resolution_prices = resolution_prices or {}
@@ -76,6 +77,7 @@ def generate_microstructure_decisions(
                 "notional_usd": float(notional_usd),
                 "fee_rate": float(schedule.get("rate", default_fee_rate)),
                 "fee_exponent": float(schedule.get("exponent", default_fee_exponent)),
+                "fee_collection": schedule.get("collection", default_fee_collection),
                 "fee_source": schedule.get("source", "config_fallback"),
                 "fee_verified": bool(schedule.get("verified", False)),
                 "signal": "positive_ofi_microprice_confirmation",
@@ -99,11 +101,13 @@ def run_microstructure_research(
     max_slippage_bps=30,
     default_fee_rate=0.07,
     default_fee_exponent=1.0,
+    default_fee_collection="usdc",
     **strategy_kwargs,
 ):
     generated = generate_microstructure_decisions(
         journal, token_ids, default_fee_rate=default_fee_rate,
-        default_fee_exponent=default_fee_exponent, **strategy_kwargs
+        default_fee_exponent=default_fee_exponent,
+        default_fee_collection=default_fee_collection, **strategy_kwargs
     )
     replay = CLOBReplayEngine(
         journal,
@@ -113,6 +117,7 @@ def run_microstructure_research(
         max_slippage_bps=max_slippage_bps,
         default_fee_rate=default_fee_rate,
         default_fee_exponent=default_fee_exponent,
+        default_fee_collection=default_fee_collection,
     ).replay(generated["decisions"])
     return {
         "observations": generated["observations"],
@@ -131,6 +136,7 @@ def main():
     parser.add_argument("--notional", type=float, default=5.0)
     parser.add_argument("--fee-rate", type=float, default=0.07,
                         help="Conservative fallback; market-specific fee schedules can be supplied by Python API")
+    parser.add_argument("--fee-collection", choices=["usdc", "shares"], default="usdc")
     parser.add_argument("--latency-ms", type=float, default=250)
     parser.add_argument("--max-book-age-ms", type=float, default=2000)
     parser.add_argument("--slippage-bps", type=float, default=8)
@@ -162,6 +168,7 @@ def main():
         slippage_bps=args.slippage_bps,
         max_slippage_bps=args.max_slippage_bps,
         default_fee_rate=args.fee_rate,
+        default_fee_collection=args.fee_collection,
     )
     print(json.dumps(result, indent=2, sort_keys=True, allow_nan=False))
 
