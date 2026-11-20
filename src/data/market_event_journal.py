@@ -74,7 +74,12 @@ class MarketEventJournal:
             raise MarketEventError("event_type is required")
         exchange_ts_ms = _timestamp_ms(payload.get("timestamp"))
         changes = payload.get("price_changes") or payload.get("changes") or []
-        asset_id = str(payload.get("asset_id") or (changes[0].get("asset_id") if changes and isinstance(changes[0], dict) else "") or "")
+        change_assets = {str(item.get("asset_id")) for item in changes
+                         if isinstance(item, dict) and item.get("asset_id")}
+        # A batched price_change can contain multiple tokens. Store it once
+        # under the empty asset key and let replay inspect each change.
+        inferred_asset = next(iter(change_assets)) if len(change_assets) == 1 else ""
+        asset_id = str(payload.get("asset_id") or inferred_asset or "")
         market_id = str(payload.get("market") or payload.get("condition_id") or "")
         canonical = json.dumps(payload, sort_keys=True, separators=(",", ":"), ensure_ascii=False)
         digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
@@ -91,7 +96,7 @@ class MarketEventJournal:
 
     def replay_book(self, asset_id, *, as_of_ms=None, received_before_ns=None):
         """Rebuild a book using only events received by the requested decision time."""
-        clauses = ["asset_id=?"]
+        clauses = ["(asset_id=? OR asset_id='')"]
         args = [str(asset_id)]
         if as_of_ms is not None:
             clauses.append("exchange_ts_ms<=?")
@@ -100,7 +105,7 @@ class MarketEventJournal:
             clauses.append("received_ts_ns<=?")
             args.append(int(received_before_ns))
         query = ("SELECT * FROM market_events WHERE " + " AND ".join(clauses)
-                 + " ORDER BY exchange_ts_ms ASC, ingest_seq ASC")
+                 + " ORDER BY ingest_seq ASC")
         bids, asks = {}, {}
         has_snapshot = False
         last_exchange_ts = None
@@ -113,6 +118,8 @@ class MarketEventJournal:
             event_type = row["event_type"]
             stamp = int(row["exchange_ts_ms"])
             if last_exchange_ts is not None and stamp < last_exchange_ts:
+                # Deltas are state transitions. Applying a late older delta
+                # after a newer one would corrupt the reconstructed book.
                 out_of_order = True
                 continue
             if event_type == "book":
