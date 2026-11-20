@@ -122,21 +122,28 @@ claim exists yet.
 
 ## Fee model correction
 
-The paper fee helper now follows Polymarket's published share-based formula:
+The paper fee helper follows Polymarket's published share-based formula:
 `fee_usd = shares × fee_rate × price × (1 - price)`. Do not multiply the
-price-dependent fee-per-share term by dollar notional directly. The helper
-`taker_fee_usd` applies five-decimal precision and the documented minimum fee;
-`fee_on_notional` first converts notional to shares. Both entry fills and
-partial exits use this calculation. The fee is recorded as a USDC-equivalent
-execution expense for the paper ledger. Fee schedules remain market-specific
-and must be sourced from market metadata rather than assumed constant.
+price-dependent fee-per-share term by dollar notional directly. Fees are
+rounded to five decimal places; amounts below the rounding increment can be
+zero. Public CLOB market metadata is queried for the market fee coefficient
+and exponent, with the token fee-rate endpoint as fallback. Explicit fee-free
+markets remain fee-free; a clearly marked conservative configuration fallback
+is used only when public metadata cannot be resolved.
+
+BUY taker fees are withheld in shares; SELL taker fees are charged in USDC.
+The paper executor therefore records gross purchased shares, fee shares,
+net received shares and a fee-adjusted cost basis. Partial exits, settlement
+and restart recovery operate on net shares. Legacy ledger rows are migrated
+and realized P&L is recalculated to avoid charging the entry fee twice.
 
 
 ## Experimental L2 features
 
 `src/signals/microstructure.py` computes book spread, microprice, top/depth
-imbalance, order-flow imbalance across price-level additions/removals, and
-liquidity-withdrawal fractions from current and prior snapshots. It rejects
-incomplete, one-sided and crossed books. These are research features only; they
-are not yet connected to the strategy runtime and do not constitute evidence of
-predictive edge.
+imbalance, standard best-queue order-flow imbalance (OFI), depth deltas, and
+observed depth-disappearance fractions from current and prior snapshots. A
+snapshot alone cannot tell whether disappearing size was canceled or executed,
+so the feature is not labeled as cancellation/withdrawal. Incomplete, one-sided
+and crossed books are rejected. These research features are not yet connected
+to the strategy runtime and do not constitute evidence of predictive edge.
