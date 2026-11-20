@@ -131,3 +131,11 @@ Paper mode only. The dormant live adapter remains disconnected and `run_live()` 
 - Five-decimal rounding allows tiny fees to round to zero; no artificial minimum charge is imposed.
 - Microstructure OFI now uses the standard best-queue price/size transition calculation. Depth changes are kept separate, and disappearance is not mislabeled as cancellation/withdrawal.
 - These fixes improve simulation fidelity, not strategy profitability. The model remains paper-only and still needs recorded data, event-time replay and out-of-sample validation.
+
+
+## Event-time CLOB replay harness — November 2026
+- Added `src/execution/clob_replay.py`. It accepts timestamped paper decision intents, reconstructs the decision-time book using only locally received events up to the decision cutoff, advances by configurable decision/submit latency, and executes against the submit-time ask ladder using the paper book-walk executor.
+- Replay rejects incomplete books, disconnect gaps, stale decision/submit books, missing asks, and insufficient depth/slippage-cap failures. It keeps decision-time microstructure features separate from submit-time fill conditions.
+- The journal now exposes the receive time of the last book-changing event, so freshness is based on actual book updates rather than unrelated market/trade messages.
+- Tests cover latency-induced quote changes, exclusion of events arriving after the submit cutoff, disconnects between decision and submit, and stale books.
+- Boundary: this is an offline execution harness. It is not wired into ASTF's signal loop, does not collect data itself, and has no historical strategy results until the collector is run and decisions are generated from a validated strategy.
