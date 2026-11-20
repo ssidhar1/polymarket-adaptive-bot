@@ -182,9 +182,11 @@ python -m src.research.microstructure_replay \
   --tokens TOKEN_ID_1,TOKEN_ID_2 \
   --fee-rate 0.07 --latency-ms 250 --slippage-bps 8
 ```
-The CLI queries the public token fee-rate endpoint for each token and records
-whether the fee rate was verified; `--fee-rate` is only the fallback if that
-lookup fails. CLOB V2 uses USDC fee collection by default; `--fee-collection
-shares` is an explicit legacy V1 override. Without externally supplied resolution outcomes, the report
+The production market-discovery path queries CLOB V2 market info by condition
+ID and records whether the fee rate was verified. The standalone CLI receives
+only token IDs, so it uses the marked `--fee-rate` fallback unless a fee
+schedule is supplied through the Python API. It deliberately does not trust
+the legacy `/fee-rate` endpoint for V2. CLOB V2 uses USDC fee collection by
+default; `--fee-collection shares` is an explicit legacy V1 override. Without externally supplied resolution outcomes, the report
 contains fills and open paper positions but no realized strategy P&L. Do not interpret candidate
 counts or mark-to-market values as validated returns.
