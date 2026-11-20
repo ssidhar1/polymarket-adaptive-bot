@@ -76,17 +76,21 @@ def compute_depth_usd(bids: list, asks: list, levels: int = 5) -> float:
 
 
 def best_ask(book: Dict) -> Optional[float]:
+    """Return an actually quoted ask; a midpoint is not executable liquidity."""
     asks = book.get("asks") or []
     if not asks:
-        return book.get("mid")
-    return _level_price(asks[0]) or book.get("mid")
+        return None
+    price = _level_price(asks[0])
+    return price if 0 < price < 1 else None
 
 
 def best_bid(book: Dict) -> Optional[float]:
+    """Return an actually quoted bid; a midpoint is not executable liquidity."""
     bids = book.get("bids") or []
     if not bids:
-        return book.get("mid")
-    return _level_price(bids[0]) or book.get("mid")
+        return None
+    price = _level_price(bids[0])
+    return price if 0 < price < 1 else None
 
 
 def cross_book_imbalance(book_up: Dict, book_down: Dict) -> float:
