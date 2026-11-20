@@ -31,3 +31,10 @@ def test_build_features():
     assert "book_imbalance" in f
     assert f["window_seconds"] == 900
     assert f["depth_usd"] > 0
+
+
+def test_missing_ask_or_bid_is_not_replaced_with_midpoint():
+    from src.data.features import best_ask, best_bid
+    book = {"mid": 0.50, "asks": [], "bids": []}
+    assert best_ask(book) is None
+    assert best_bid(book) is None
