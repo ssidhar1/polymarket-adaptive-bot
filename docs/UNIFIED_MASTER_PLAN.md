@@ -104,7 +104,7 @@ Paper mode only. The dormant live adapter remains disconnected and `run_live()` 
 - Added `src/data/market_stream_collector.py`, an optional public-channel WebSocket collector using the documented token subscription, custom market events and 10-second application heartbeat. It reconnects with bounded exponential backoff and journals a per-token connection gap after disconnect. It is not wired into the ASTF signal loop and no collected dataset exists yet.
 - Replay now invalidates book state across disconnects and will not mark a book complete until a new full snapshot arrives. Historical exchange-time replay requires a local receive-time cutoff as well; this blocks future-arriving messages from leaking into a past decision.
 - Important boundary: this is a paper-data collector only. It does not connect to the authenticated user channel, submit orders, or change the strategy runtime.
-- Next order: implement collector + gap/reconnect state machine; build deterministic replay executor with book walking and conservative latency; compare order-flow imbalance, microprice, liquidity withdrawal, cross-asset lead/lag and near-resolution signals against a no-trade baseline; only then enable calibrated paper candidates.
+- Next order: build a deterministic event-time replay executor with book walking, conservative decision/submit latency and cancel/replace behavior; connect it to the recorded CLOB dataset; compare order-flow imbalance, microprice, liquidity withdrawal, cross-asset lead/lag and near-resolution signals against a no-trade baseline; only then enable calibrated paper candidates.
 
 
 ## Execution fee audit — November 2026
@@ -114,3 +114,10 @@ Paper mode only. The dormant live adapter remains disconnected and `run_live()` 
 - Hardened CLOB replay: non-finite levels are ignored; a full snapshot after a connection gap resets the exchange-time baseline. A clean snapshot is the authoritative recovery point.
 - Collector reconnects when no WebSocket frame/PONG is received for 25 seconds, rather than trusting an apparently open TCP socket. Exponential backoff resets only after a stable 60-second session.
 - Added collector decoding tests for legacy market-channel book events, batched events and heartbeat frames.
+
+
+## Experimental microstructure features — November 2026
+- Added `src/signals/microstructure.py` with deterministic book spread, microprice, top/depth imbalance, order-flow imbalance across changed price levels, and bid/ask liquidity-withdrawal fractions.
+- Features reject incomplete, one-sided and crossed/locked books. They are computed from current and prior snapshots only; no probability, alpha claim or trading action is produced.
+- These features are not yet connected to the live ASTF decision loop. Their usefulness must be tested against timestamped replay, realistic execution costs, and out-of-sample periods before any signal weighting is changed.
+- Collector now treats malformed market payloads as skippable input but treats SQLite/storage failures as fatal to the current stream session, forcing reconnect and recording a gap rather than silently dropping data.
