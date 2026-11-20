@@ -25,6 +25,9 @@ class EnsembleSignal:
         self.min_abs_momentum = float(sig.get("min_abs_momentum", 0.08))
         self.max_prob_lift = min(0.06, max(0.0, float(sig.get("max_prob_lift", 0.04))))
         self.degen = bool(sig.get("degen_mode", True))
+        # Technical feature lifts are not calibrated probabilities. Keep them
+        # diagnostic-only unless an operator explicitly enables paper probes.
+        self.allow_heuristic_paper_entries = bool(sig.get("allow_heuristic_paper_entries", False))
         self.reject_counts: Dict[str, int] = {}
 
     def _reject(self, reason: str) -> Dict:
@@ -188,26 +191,62 @@ class EnsembleSignal:
         lift = min(signal_strength * max_lift * cheap_boost, max_lift)
         est_prob = float(np.clip(entry + lift, 0.025, 0.975))
 
-        raw_edge = est_prob - entry - self._effective_fee(entry, fee_rate)
+        # This is a heuristic ranking proxy, not an independently estimated
+        # probability. It must never be presented as calibrated EV.
+        heuristic_edge = est_prob - entry - self._effective_fee(entry, fee_rate)
         min_edge = self.min_edge if not self.degen else max(0.008, self.min_edge * 0.60)
-        if raw_edge < min_edge:
-            return self._reject("neg_ev")
+        if heuristic_edge < min_edge:
+            return self._reject("heuristic_edge_below_costs")
 
-        hard_pass = (
+        signal_pass = (
             score >= self.min_score
-            and raw_edge >= min_edge
+            and heuristic_edge >= min_edge
             and total_drive >= self.min_abs_momentum * 0.65
             and entry <= self.max_entry
         )
+        if not signal_pass:
+            return self._reject("signal_threshold")
+
+        if not self.allow_heuristic_paper_entries:
+            self.reject_counts["uncalibrated_probability"] = (
+                self.reject_counts.get("uncalibrated_probability", 0) + 1
+            )
+            return {
+                "type": "directional",
+                "score": score,
+                "direction": direction,
+                "est_prob": None,
+                "edge_after_fees": None,
+                "heuristic_probability_proxy": est_prob,
+                "heuristic_edge_proxy": heuristic_edge,
+                "probability_kind": "uncalibrated_heuristic_proxy",
+                "entry": entry,
+                "pass": False,
+                "reason": "uncalibrated_probability",
+                "components": {
+                    "drive": total_drive,
+                    "imbalance": signed_imb,
+                    "lag_boost": lag_boost,
+                    "lead_boost": lead_boost,
+                    "microprice_boost": micro_boost,
+                    "twap_lock": twap_lock,
+                    "heuristic_edge_proxy": heuristic_edge,
+                    "effective_fee": self._effective_fee(entry, fee_rate),
+                },
+            }
 
         return {
             "type": "directional",
             "score": score,
             "direction": direction,
             "est_prob": est_prob,
-            "edge_after_fees": raw_edge,
+            "edge_after_fees": heuristic_edge,
+            "heuristic_probability_proxy": est_prob,
+            "heuristic_edge_proxy": heuristic_edge,
+            "probability_kind": "uncalibrated_heuristic_proxy",
             "entry": entry,
-            "pass": hard_pass,
+            "pass": True,
+            "paper_probe": True,
             "components": {
                 "drive": total_drive,
                 "imbalance": signed_imb,
@@ -215,7 +254,7 @@ class EnsembleSignal:
                 "lead_boost": lead_boost,
                 "microprice_boost": micro_boost,
                 "twap_lock": twap_lock,
-                "edge": raw_edge,
+                "heuristic_edge_proxy": heuristic_edge,
                 "effective_fee": self._effective_fee(entry, fee_rate),
             },
         }
