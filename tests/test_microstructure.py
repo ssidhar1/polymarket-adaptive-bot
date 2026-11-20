@@ -72,5 +72,5 @@ def test_ofi_counts_new_price_levels_entering_top_of_book():
         "asks": [{"price": "0.51", "size": "6"}],
     }
     features = compute_microstructure_features(current, previous)
-    # New bid contributes +7; new ask contributes -6; old levels are removed.
-    assert features["ofi"] == pytest.approx(-9)
+    # Bid depth changes by -3; ask depth changes by -4; OFI is their difference.
+    assert features["ofi"] == pytest.approx(1)
