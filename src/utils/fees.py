@@ -9,14 +9,20 @@ from typing import Optional
 import math
 
 
-def taker_fee_rate(price: float, rate: float = 0.07, exponent: int = 1) -> float:
+def taker_fee_rate(price: float, rate: float = 0.07, exponent: float = 1.0) -> float:
     """Return the USDC-equivalent fee per share at the execution price."""
-    p = float(price)
-    coefficient = float(rate)
-    if not math.isfinite(p) or not math.isfinite(coefficient) or p <= 0.0 or p >= 1.0:
+    try:
+        p = float(price)
+        coefficient = float(rate)
+        exp = float(exponent)
+    except (TypeError, ValueError, OverflowError):
         return 0.0
-    exp = max(1, int(exponent))
-    return max(0.0, coefficient) * (p ** exp) * ((1.0 - p) ** exp)
+    if (not math.isfinite(p) or not math.isfinite(coefficient)
+            or not math.isfinite(exp) or p <= 0.0 or p >= 1.0
+            or exp <= 0.0 or exp > 4.0):
+        return 0.0
+    coefficient = max(0.0, min(0.25, coefficient))
+    return coefficient * (p ** exp) * ((1.0 - p) ** exp)
 
 
 def taker_fee_usd(shares: float, price: float, rate: float = 0.07,
