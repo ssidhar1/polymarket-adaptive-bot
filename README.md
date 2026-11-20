@@ -173,3 +173,15 @@ passes those timestamped intents into the event-time replay engine. The
 thresholds are research parameters, not tuned or validated. This baseline is
 not connected to the production signal loop and must be compared with a
 no-trade baseline and walk-forward holdouts before any deployment decision.
+
+
+Run the baseline against a locally collected journal:
+```bash
+python -m src.research.microstructure_replay \
+  --db data/clob_events.sqlite \
+  --tokens TOKEN_ID_1,TOKEN_ID_2 \
+  --fee-rate 0.07 --latency-ms 250 --slippage-bps 8
+```
+Without externally supplied resolution outcomes, the report contains fills and
+open paper positions but no realized strategy P&L. Do not interpret candidate
+counts or mark-to-market values as validated returns.
