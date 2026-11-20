@@ -77,10 +77,12 @@ class PaperExecutor:
         # the live ask ladder, consume actual displayed depth and reject a
         # requested notional that cannot be filled inside the slippage budget.
         slip = max(self.extra_slippage, requested * self.slippage_bps / 10_000.0)
+        ladder_fee = None
         if side == "buy" and book_asks is not None:
             remaining = notional
             shares = 0.0
             spent = 0.0
+            ladder_fee = 0.0
             valid_levels = []
             for level in book_asks:
                 try:
@@ -102,7 +104,12 @@ class PaperExecutor:
                 spend = min(remaining, capacity)
                 if spend <= 0:
                     continue
-                shares += spend / adjusted
+                level_shares = spend / adjusted
+                shares += level_shares
+                # Polymarket's fee curve is price-dependent. Applying the fee
+                # once at VWAP is not equivalent when a fill walks multiple
+                # price levels, so calculate each level's fee independently.
+                ladder_fee += spend * taker_fee_rate(adjusted, rate=self.fee_rate if fee_rate is None else max(0.0, min(0.25, _finite(fee_rate, self.fee_rate))))
                 spent += spend
                 remaining -= spend
                 if remaining <= max(1e-8, notional * 1e-8):
@@ -140,8 +147,8 @@ class PaperExecutor:
 
         # No maker rebate: aggressive orders cross the spread and pay taker fees.
         effective_fee_rate = self.fee_rate if fee_rate is None else max(0.0, min(0.25, _finite(fee_rate, self.fee_rate)))
-        fee_frac = taker_fee_rate(fill_price, rate=effective_fee_rate)
-        fee = notional * fee_frac
+        fee = ladder_fee if ladder_fee is not None else notional * taker_fee_rate(fill_price, rate=effective_fee_rate)
+        fee_frac = fee / notional if notional > 0 else 0.0
         order_id = str(uuid.uuid4())[:8]
 
         order = {
