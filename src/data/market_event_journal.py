@@ -81,6 +81,8 @@ class MarketEventJournal:
             raise MarketEventError("event_type is required")
         exchange_ts_ms = _timestamp_ms(payload.get("timestamp"))
         changes = payload.get("price_changes") or payload.get("changes") or []
+        if not isinstance(changes, list):
+            changes = []
         change_assets = {str(item.get("asset_id")) for item in changes
                          if isinstance(item, dict) and item.get("asset_id")}
         # A batched price_change can contain multiple tokens. Store it once
@@ -184,7 +186,11 @@ class MarketEventJournal:
                 applied += 1
             elif event_type == "price_change" and has_snapshot:
                 changes = payload.get("price_changes") or payload.get("changes") or []
+                if not isinstance(changes, list):
+                    changes = []
                 for change in changes:
+                    if not isinstance(change, dict):
+                        continue
                     if str(change.get("asset_id") or row["asset_id"]) != str(asset_id):
                         continue
                     side = str(change.get("side") or "").upper()
