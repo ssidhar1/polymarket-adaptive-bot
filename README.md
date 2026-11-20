@@ -162,3 +162,14 @@ This is an execution/research harness, not a strategy or profitability claim.
 It is not connected to the live ASTF loop and requires an actual journal dataset
 plus externally supplied decision intents. A supplied resolution price is used
 only for offline paper scoring.
+
+
+## Microstructure research baseline
+
+`src/research/microstructure_replay.py` generates a simple exploratory
+baseline: buy an outcome token only when normalized best-queue OFI and
+microprice edge agree, subject to spread, depth and cooldown filters. It then
+passes those timestamped intents into the event-time replay engine. The
+thresholds are research parameters, not tuned or validated. This baseline is
+not connected to the production signal loop and must be compared with a
+no-trade baseline and walk-forward holdouts before any deployment decision.
