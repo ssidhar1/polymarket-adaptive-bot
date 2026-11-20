@@ -125,3 +125,13 @@ price-dependent fee-per-share term by dollar notional directly. The helper
 partial exits use this calculation. The fee is recorded as a USDC-equivalent
 execution expense for the paper ledger. Fee schedules remain market-specific
 and must be sourced from market metadata rather than assumed constant.
+
+
+## Experimental L2 features
+
+`src/signals/microstructure.py` computes book spread, microprice, top/depth
+imbalance, order-flow imbalance across price-level additions/removals, and
+liquidity-withdrawal fractions from current and prior snapshots. It rejects
+incomplete, one-sided and crossed books. These are research features only; they
+are not yet connected to the strategy runtime and do not constitute evidence of
+predictive edge.
