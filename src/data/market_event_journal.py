@@ -158,11 +158,13 @@ class MarketEventJournal:
         out_of_order = False
         applied = 0
         latest_snapshot_received_ns = None
+        latest_book_update_received_ns = None
         for received_ns, _, _, kind, row in timeline:
             if kind == "gap":
                 bids, asks = {}, {}
                 has_snapshot = False
                 latest_snapshot_received_ns = None
+                latest_book_update_received_ns = None
                 last_exchange_ts = None
                 out_of_order = False
                 applied += 1
@@ -183,6 +185,7 @@ class MarketEventJournal:
                     has_snapshot = False
                     bids, asks = {}, {}
                     latest_snapshot_received_ns = None
+                    latest_book_update_received_ns = None
                     continue
                 bids = _levels(payload.get("bids") or payload.get("buys") or [])
                 asks = _levels(payload.get("asks") or payload.get("sells") or [])
@@ -190,6 +193,7 @@ class MarketEventJournal:
                 out_of_order = False
                 last_exchange_ts = stamp
                 latest_snapshot_received_ns = received_ns
+                latest_book_update_received_ns = received_ns
                 applied += 1
                 continue
             # Trades, tick-size changes and market lifecycle events are
@@ -203,6 +207,7 @@ class MarketEventJournal:
                 has_snapshot = False
                 bids, asks = {}, {}
                 latest_snapshot_received_ns = None
+                latest_book_update_received_ns = None
                 continue
             if event_type == "price_change" and has_snapshot:
                 changes = payload.get("price_changes") or payload.get("changes") or []
@@ -232,6 +237,7 @@ class MarketEventJournal:
                     asset_change_applied = True
                 if asset_change_applied:
                     last_exchange_ts = stamp if last_exchange_ts is None else max(last_exchange_ts, stamp)
+                    latest_book_update_received_ns = received_ns
         return {
             "asset_id": str(asset_id),
             "bids": [{"price": p, "size": bids[p]} for p in sorted(bids, reverse=True)],
@@ -240,6 +246,7 @@ class MarketEventJournal:
             "complete": has_snapshot and not out_of_order,
             "out_of_order": out_of_order,
             "latest_snapshot_received_ns": latest_snapshot_received_ns,
+            "latest_book_update_received_ns": latest_book_update_received_ns,
             "applied_events": applied,
             "last_exchange_ts_ms": last_exchange_ts,
         }
