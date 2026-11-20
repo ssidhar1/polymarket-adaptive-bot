@@ -112,3 +112,25 @@ def test_book_walk_calculates_price_dependent_fee_per_level():
     )
     assert order["fee"] == pytest.approx(expected_fee)
     assert order["fee_frac"] == pytest.approx(expected_fee / 8.0)
+
+
+def test_buy_fee_is_withheld_in_shares_and_basis_is_adjusted():
+    executor = PaperExecutor(fee_rate=0.07, slippage_bps=0)
+    order = executor.place_order("token", "buy", 0.50, 10.0, "market")
+    assert order is not None
+    assert order["shares"] == pytest.approx(20.0)
+    assert order["fee"] == pytest.approx(0.35)
+    assert order["fee_shares"] == pytest.approx(0.70)
+    assert order["net_shares"] == pytest.approx(19.30)
+    assert order["effective_entry_price"] == pytest.approx(10.0 / 19.30)
+    resolved = executor.resolve(order["order_id"], 1.0)
+    assert resolved["pnl"] == pytest.approx(9.30)
+
+
+def test_sell_fee_is_usdc_not_share_withholding():
+    executor = PaperExecutor(fee_rate=0.07, slippage_bps=0)
+    order = executor.place_order("token", "sell", 0.50, 10.0, "market")
+    assert order is not None
+    assert order["fee_shares"] == 0
+    assert order["net_shares"] == pytest.approx(order["shares"])
+    assert order["residual_fee_usd"] == pytest.approx(order["fee"])
