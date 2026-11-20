@@ -11,7 +11,7 @@ import logging
 import math
 import uuid
 
-from src.utils.fees import taker_fee_rate
+from src.utils.fees import taker_fee_rate, taker_fee_usd
 
 logger = logging.getLogger("astf.execution.paper")
 
@@ -109,7 +109,10 @@ class PaperExecutor:
                 # Polymarket's fee curve is price-dependent. Applying the fee
                 # once at VWAP is not equivalent when a fill walks multiple
                 # price levels, so calculate each level's fee independently.
-                ladder_fee += spend * taker_fee_rate(adjusted, rate=self.fee_rate if fee_rate is None else max(0.0, min(0.25, _finite(fee_rate, self.fee_rate))))
+                ladder_fee += taker_fee_usd(
+                    level_shares, adjusted,
+                    rate=self.fee_rate if fee_rate is None else max(0.0, min(0.25, _finite(fee_rate, self.fee_rate))),
+                )
                 spent += spend
                 remaining -= spend
                 if remaining <= max(1e-8, notional * 1e-8):
@@ -147,7 +150,9 @@ class PaperExecutor:
 
         # No maker rebate: aggressive orders cross the spread and pay taker fees.
         effective_fee_rate = self.fee_rate if fee_rate is None else max(0.0, min(0.25, _finite(fee_rate, self.fee_rate)))
-        fee = ladder_fee if ladder_fee is not None else notional * taker_fee_rate(fill_price, rate=effective_fee_rate)
+        fee = ladder_fee if ladder_fee is not None else taker_fee_usd(
+            shares, fill_price, rate=effective_fee_rate
+        )
         fee_frac = fee / notional if notional > 0 else 0.0
         order_id = str(uuid.uuid4())[:8]
 
