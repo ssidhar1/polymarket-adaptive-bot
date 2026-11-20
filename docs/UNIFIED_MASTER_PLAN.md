@@ -75,3 +75,11 @@ Paper mode only. The dormant live adapter remains disconnected and `run_live()` 
 - `src/research/forecast_store.py` stores immutable forecast observations separately from later resolution events. Unmodeled scanner observations may be retained with a null probability; they are excluded from probability scorecards. Resolution events require a later timestamp and a source reference.
 - `src/research/scorecard.py` reports sample size, win rate, Brier score, per-share net P&L after supplied fees/slippage, cost totals and drawdown sequence. It is explicitly research-only and does not allocate capital.
 - These research components are not yet connected to the production scan loop or existing paper lifecycle. Until that integration is reviewed, no weekly candidates can open positions and no allocator compounding is claimed.
+
+
+## Critical realism fixes — November 2026
+- Short-window token IDs are now mapped by explicit `outcomes` labels (Up/Down or Yes/No). Ambiguous, duplicate or misaligned mappings fail closed; array position is no longer trusted.
+- `best_ask` and `best_bid` now return no quote when the relevant side of the book is empty. Midpoint is a valuation reference, never an executable fill. The paper entry loop requires an actual ask.
+- Complete-set arbitrage estimates require both actual asks; a midpoint-only sum is not reported as an arbitrage opportunity.
+- ASTF's prior directional probability lift was a heuristic derived from technical features and entry price, not an independently calibrated probability. Directional candidates now fail closed by default with `uncalibrated_probability`; their proxy is labeled diagnostic only. An explicit paper-only opt-in allows tiny discovery probes through the existing exploration budget, never as proven alpha.
+- These changes intentionally reduce trade count. A quiet bot is preferable to manufacturing positive expectancy from uncalibrated probabilities or impossible midpoint fills.
