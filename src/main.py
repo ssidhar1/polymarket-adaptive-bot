@@ -26,7 +26,7 @@ from src.execution.paper import PaperExecutor
 from src.execution.positions import PositionTracker
 from src.execution.exit_policy import evaluate_exit
 from src.execution.paper_exit_lifecycle import PaperExitLifecycle
-from src.utils.fees import taker_fee_rate, taker_fee_usd
+from src.utils.fees import taker_fee_usd
 
 load_dotenv()
 logger = setup_logging(os.getenv("LOG_LEVEL", "INFO"))
