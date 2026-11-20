@@ -158,3 +158,33 @@ def test_malformed_delta_container_does_not_break_book_replay(tmp_path):
     book = journal.replay_book("token")
     assert book["complete"] is True
     assert book["asks"][0]["price"] == 0.5
+
+
+def test_fresh_snapshot_after_gap_resets_exchange_clock_baseline(tmp_path):
+    journal = MarketEventJournal(tmp_path / "events.sqlite")
+    journal.append({
+        "event_type": "book", "asset_id": "token", "timestamp": 2000,
+        "bids": [], "asks": [{"price": "0.5", "size": "10"}],
+    }, received_ts_ns=100)
+    journal.record_connection_gap(["token"], received_ts_ns=200)
+    journal.append({
+        "event_type": "book", "asset_id": "token", "timestamp": 1500,
+        "bids": [{"price": "0.49", "size": "4"}],
+        "asks": [{"price": "0.51", "size": "6"}],
+    }, received_ts_ns=300)
+    book = journal.replay_book("token")
+    assert book["complete"] is True
+    assert book["last_exchange_ts_ms"] == 1500
+
+
+def test_non_finite_book_levels_are_ignored(tmp_path):
+    journal = MarketEventJournal(tmp_path / "events.sqlite")
+    journal.append({
+        "event_type": "book", "asset_id": "token", "timestamp": 1000,
+        "bids": [{"price": "0.49", "size": "inf"}],
+        "asks": [{"price": "nan", "size": "10"}, {"price": "0.51", "size": "3"}],
+    })
+    book = journal.replay_book("token")
+    assert book["complete"] is True
+    assert book["bids"] == []
+    assert book["asks"] == [{"price": 0.51, "size": 3.0}]
