@@ -81,6 +81,9 @@ def _timing_meta(m: dict, feat: dict, score: float, edge: float, mom: float, reg
         "momentum": float(mom or 0),
         "regime": regime or "",
         "trade_type": trade_type,
+        "fee_rate": float(feat.get("fee_rate", 0.07)),
+        "fee_exponent": float(feat.get("fee_exponent", 1.0)),
+        "fee_source": feat.get("fee_source", "config_fallback"),
         "vs_open": float(feat.get("vs_open") or 0),
     }
 
@@ -131,6 +134,7 @@ def _sync_paper_ledger(tracker: PositionTracker, ledger: PaperExitLifecycle):
             "time_remaining_pct": pos.time_remaining_pct, "score": pos.score,
             "edge_after_fees": pos.edge_after_fees, "momentum": pos.momentum,
             "vs_open": pos.vs_open, "regime": pos.regime, "trade_type": pos.trade_type,
+            "fee_rate": pos.fee_rate, "fee_exponent": pos.fee_exponent,
             "slug": pos.slug, "end_date": pos.end_date,
         }
         if durable is None:
@@ -164,6 +168,8 @@ def _sync_paper_ledger(tracker: PositionTracker, ledger: PaperExitLifecycle):
             "side": "buy", "entry_price": avg, "size_usd": remaining * avg,
             "shares": remaining, "fee": 0.0, "opened_at": opened.isoformat(),
             "slug": meta.get("slug", ""), "end_date": meta.get("end_date"),
+            "fee_rate": meta.get("fee_rate", 0.07),
+            "fee_exponent": meta.get("fee_exponent", 1.0),
             **{k: v for k, v in meta.items() if k not in ("slug", "end_date")},
         }
         tracker.import_open([row])
@@ -384,7 +390,8 @@ def run_paper(config: dict):
                                     slip_bps = max(0.0, float(exit_cfg.get("slippage_bps", paper_slippage)))
                                     exit_px = bid - bid * slip_bps / 10000.0
                                     if qty * exit_px >= 0.50 and 0 < exit_px < 1:
-                                        exit_fee = taker_fee_usd(qty, exit_px, rate=fee_rate)
+                                        exit_fee = taker_fee_usd(qty, exit_px, rate=pos.fee_rate,
+                                                                  exponent=pos.fee_exponent)
                                         prior_exit_qty = durable["exit_quantity"]
                                         event_id = f"sell:{pos.order_id}:{prior_exit_qty + qty:.12f}"
                                         updated = paper_lifecycle.record_exit_fill(
@@ -657,7 +664,8 @@ def run_paper(config: dict):
                         selected_book = book_up if token == up_token else book_down
                         order = executor.place_order(
                             token, "buy", entry, size, mid_id, already_aggressive=True,
-                            fee_rate=float(feat.get("fee_rate") or fee_rate),
+                            fee_rate=float(feat.get("fee_rate", fee_rate)),
+                            fee_exponent=float(feat.get("fee_exponent", 1.0)),
                             book_asks=selected_book.get("asks") or [],
                         )
                         if not order:
