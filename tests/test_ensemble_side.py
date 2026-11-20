@@ -109,3 +109,18 @@ def test_explicit_heuristic_paper_probe_is_labeled_and_capped_by_risk_path():
     assert sig["pass"] is True
     assert sig["paper_probe"] is True
     assert sig["probability_kind"] == "uncalibrated_heuristic_proxy"
+
+
+def test_market_specific_zero_fee_is_not_replaced_by_config_default():
+    ens = EnsembleSignal(_cfg())
+    assert ens._effective_fee(0.50, 0.0) == 0.001  # configured 20 bps slippage only
+    assert ens._effective_fee(0.50, 0.07, 2.0) == 0.005375
+
+
+def test_complete_set_cost_uses_explicit_zero_market_fee():
+    ens = EnsembleSignal(_cfg())
+    arb = ens.complete_set_arb(
+        0.5, 0.5, up_ask=0.495, down_ask=0.495, fee_rate=0.0,
+    )
+    assert arb is not None
+    assert arb["edge"] > 0
