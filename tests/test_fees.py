@@ -45,3 +45,14 @@ def test_non_finite_fee_inputs_fail_closed():
     assert taker_fee_rate(float("nan"), rate=0.07) == 0.0
     assert taker_fee_usd(float("inf"), 0.5, rate=0.07) == 0.0
     assert fee_on_notional(float("nan"), 0.5, rate=0.07) == 0.0
+
+
+def test_fee_helper_preserves_fractional_market_exponents():
+    price = 0.40
+    expected = 0.07 * (price ** 2.5) * ((1.0 - price) ** 2.5)
+    assert taker_fee_rate(price, rate=0.07, exponent=2.5) == pytest.approx(expected)
+
+
+def test_fee_helper_rejects_invalid_exponents_and_caps_coefficients():
+    assert taker_fee_rate(0.5, rate=0.07, exponent=float("nan")) == 0.0
+    assert taker_fee_rate(0.5, rate=0.50, exponent=1.0) == pytest.approx(0.25 * 0.5 * 0.5)
