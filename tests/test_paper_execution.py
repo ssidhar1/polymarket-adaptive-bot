@@ -124,6 +124,7 @@ def test_v2_buy_fee_is_charged_in_usdc_and_adjusts_cash_basis():
     assert order["fee_shares"] == 0
     assert order["net_shares"] == pytest.approx(20.0)
     assert order["effective_entry_price"] == pytest.approx(10.35 / 20.0)
+    assert order["size_usd"] == pytest.approx(10.35)
     resolved = executor.resolve(order["order_id"], 1.0)
     assert resolved["pnl"] == pytest.approx(9.65)
 
@@ -136,6 +137,7 @@ def test_legacy_v1_buy_fee_share_collection_remains_explicitly_supported():
     assert order["fee_shares"] == pytest.approx(0.70)
     assert order["net_shares"] == pytest.approx(19.30)
     assert order["effective_entry_price"] == pytest.approx(10.0 / 19.30)
+    assert order["size_usd"] == pytest.approx(10.0)
     resolved = executor.resolve(order["order_id"], 1.0)
     assert resolved["pnl"] == pytest.approx(9.30)
 

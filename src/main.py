@@ -113,13 +113,24 @@ def _prune_cooldowns(cooldown_until: dict, now: float):
         del cooldown_until[k]
 
 
-def _can_open_for_market(risk, tracker, size: float, open_count: int, asset: str, window: str) -> bool:
+def _can_open_for_market(
+    risk, tracker, size: float, open_count: int, asset: str, window: str,
+    fee_rate: float = 0.0,
+) -> bool:
     positions = tracker.get_open_list()
     reserved = sum(float(p.size_usd) for p in positions)
     asset_used = sum(float(p.size_usd) for p in positions if p.asset == asset)
     window_used = sum(float(p.size_usd) for p in positions if p.window == window)
+    # Reserve a conservative upper bound for entry fees. For the supported
+    # binary price domain, the per-share fee as a fraction of notional cannot
+    # exceed the fee coefficient. This prevents fees pushing a fill over caps.
+    try:
+        fee_buffer_rate = max(0.0, min(0.25, float(fee_rate)))
+    except (TypeError, ValueError):
+        fee_buffer_rate = 0.25
+    risk_notional = float(size) * (1.0 + fee_buffer_rate)
     return risk.can_open(
-        size, open_count=open_count, reserved_exposure=reserved,
+        risk_notional, open_count=open_count, reserved_exposure=reserved,
         asset_exposure=asset_used, window_exposure=window_used,
     )
 
@@ -652,7 +663,7 @@ def run_paper(config: dict):
                             edge_after_fees=edge,
                             regime=regime,
                         )
-                        if size <= 0 or not _can_open_for_market(risk, tracker, size, open_n, asset, str(m.get("_window") or "")):
+                        if size <= 0 or not _can_open_for_market(risk, tracker, size, open_n, asset, str(m.get("_window") or ""), fee_rate=float(feat.get("fee_rate", fee_rate))):
                             continue
 
                         # Regime-conditional pyramid (once per market)
@@ -661,7 +672,7 @@ def run_paper(config: dict):
                         if (regime == "favorable" and existing and len(existing) == 1
                             and cooldown_until.get(pyr_key, 0) <= now):
                             size = size * 0.50
-                            if not _can_open_for_market(risk, tracker, size, open_n, asset, str(m.get("_window") or "")):
+                            if not _can_open_for_market(risk, tracker, size, open_n, asset, str(m.get("_window") or ""), fee_rate=float(feat.get("fee_rate", fee_rate))):
                                 continue
                             cooldown_until[pyr_key] = now + cooldown_sec * 2
 

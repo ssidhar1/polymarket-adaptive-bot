@@ -1,6 +1,8 @@
 import pytest
 
 from src.risk.manager import RiskManager
+from src.execution.positions import PositionTracker
+from src.main import _can_open_for_market
 
 
 def _risk():
@@ -49,3 +51,12 @@ def test_daily_loss_pause_is_not_cleared_by_restart_api():
     risk.record_pnl(-60.0)
     assert risk.paused
     assert not risk.can_open(10)
+
+
+def test_entry_fee_buffer_is_included_before_exposure_caps():
+    risk = _risk()
+    tracker = PositionTracker()
+    # A $38 entry at a 7% fee coefficient can consume up to $40.66,
+    # so it must not pass a $40 max-position cap.
+    assert not _can_open_for_market(risk, tracker, 38.0, 0, "btc", "5m", fee_rate=0.07)
+    assert _can_open_for_market(risk, tracker, 37.0, 0, "btc", "5m", fee_rate=0.07)
