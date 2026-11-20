@@ -221,7 +221,8 @@ def run_paper(config: dict):
     prefer_maker = bool(config.get("execution", {}).get("prefer_maker", True))
     paper_slippage = float(config.get("execution", {}).get("paper_slippage_bps", 20))
     executor = PaperExecutor(
-        fee_rate=fee_rate, prefer_maker=False, slippage_bps=paper_slippage
+        fee_rate=fee_rate, prefer_maker=False, slippage_bps=paper_slippage,
+        max_slippage_bps=float(config.get("execution", {}).get("max_slippage_bps", 30)),
     )
     tracker = PositionTracker()
     if saved.get("open_positions") and not os.getenv("PAPER_RESET_BANKROLL"):
@@ -650,9 +651,11 @@ def run_paper(config: dict):
                         meta = _timing_meta(
                             m, feat, sig["score"], edge or 0, mom, regime, trade_type
                         )
+                        selected_book = book_up if token == up_token else book_down
                         order = executor.place_order(
                             token, "buy", entry, size, mid_id, already_aggressive=True,
                             fee_rate=float(feat.get("fee_rate") or fee_rate),
+                            book_asks=selected_book.get("asks") or [],
                         )
                         if not order:
                             continue
