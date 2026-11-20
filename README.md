@@ -182,6 +182,8 @@ python -m src.research.microstructure_replay \
   --tokens TOKEN_ID_1,TOKEN_ID_2 \
   --fee-rate 0.07 --latency-ms 250 --slippage-bps 8
 ```
-Without externally supplied resolution outcomes, the report contains fills and
-open paper positions but no realized strategy P&L. Do not interpret candidate
+The CLI queries the public token fee-rate endpoint for each token and records
+whether the fee rate was verified; `--fee-rate` is only the fallback if that
+lookup fails. Without externally supplied resolution outcomes, the report
+contains fills and open paper positions but no realized strategy P&L. Do not interpret candidate
 counts or mark-to-market values as validated returns.
