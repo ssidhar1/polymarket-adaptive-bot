@@ -13,6 +13,10 @@ def build_strategy_scorecard(records: Iterable[ForecastOutcome]) -> dict:
         validate_forecast(row)
     if not rows:
         return {"sample_size": 0, "status": "insufficient_data"}
+    if len({row.strategy for row in rows}) != 1:
+        raise ValueError("build one strategy scorecard at a time")
+    if len({(row.strategy, row.market_id) for row in rows}) != len(rows):
+        raise ValueError("duplicate strategy/market forecast records are not allowed")
     rows.sort(key=lambda row: row.observed_at)
     pnls = [
         (1.0 if row.outcome_yes else 0.0) - row.entry_price
@@ -37,7 +41,8 @@ def build_strategy_scorecard(records: Iterable[ForecastOutcome]) -> dict:
         "modeled_fees_per_share_total": sum(row.fees_per_share for row in rows),
         "modeled_slippage_per_share_total": sum(row.slippage_per_share for row in rows),
         "max_drawdown_per_share_sequence": max_drawdown,
-        "profit_factor": sum(wins) / abs(sum(losses)) if losses else (float("inf") if wins else 0.0),
+        "profit_factor": sum(wins) / abs(sum(losses)) if losses else (None if wins else 0.0),
+        "profit_factor_status": "no_losses" if wins and not losses else "defined",
         "status": "research_only_no_capital_promotion",
         "pnl_basis": "one-share outcome payoff less supplied modeled fees and slippage",
     }
