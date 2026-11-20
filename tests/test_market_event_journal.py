@@ -20,7 +20,7 @@ def test_journal_replays_snapshot_and_price_level_updates(tmp_path):
         ],
     }, received_ts_ns=20)
 
-    book = journal.replay_book("token", as_of_ms=1100)
+    book = journal.replay_book("token", as_of_ms=1100, received_before_ns=20)
     assert book["complete"] is True
     assert book["bids"] == [{"price": 0.5, "size": 4.0}, {"price": 0.49, "size": 10.0}]
     assert book["asks"] == [{"price": 0.52, "size": 7.0}]
@@ -116,3 +116,9 @@ def test_disconnect_invalidates_book_until_fresh_snapshot(tmp_path):
     recovered = journal.replay_book("token")
     assert recovered["complete"] is True
     assert recovered["bids"][0]["price"] == 0.5
+
+
+def test_historical_replay_requires_receive_time_cutoff(tmp_path):
+    journal = MarketEventJournal(tmp_path / "events.sqlite")
+    with pytest.raises(MarketEventError, match="received_before_ns"):
+        journal.replay_book("token", as_of_ms=1000)
