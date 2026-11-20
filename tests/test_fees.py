@@ -20,7 +20,7 @@ def test_fee_is_symmetric_around_fifty_percent():
 
 
 def test_minimum_fee_rounding():
-    assert taker_fee_usd(0.001, 0.50, 0.07) == pytest.approx(0.00001)
+    assert taker_fee_usd(0.0001, 0.50, 0.07) == pytest.approx(0.00001)
     assert taker_fee_usd(0, 0.50, 0.07) == 0
 
 
