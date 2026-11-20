@@ -134,3 +134,11 @@ def test_sell_fee_is_usdc_not_share_withholding():
     assert order["fee_shares"] == 0
     assert order["net_shares"] == pytest.approx(order["shares"])
     assert order["residual_fee_usd"] == pytest.approx(order["fee"])
+
+
+def test_paper_executor_uses_market_fee_exponent():
+    executor = PaperExecutor(fee_rate=0.07, fee_exponent=2, slippage_bps=0)
+    order = executor.place_order("token", "buy", 0.50, 50.0, "market")
+    assert order is not None
+    assert order["fee_exponent"] == 2
+    assert order["fee"] == pytest.approx(100 * 0.07 * (0.50 * 0.50) ** 2)
