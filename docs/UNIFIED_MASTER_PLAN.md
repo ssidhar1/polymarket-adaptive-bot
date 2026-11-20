@@ -83,3 +83,10 @@ Paper mode only. The dormant live adapter remains disconnected and `run_live()` 
 - Complete-set arbitrage estimates require both actual asks; a midpoint-only sum is not reported as an arbitrage opportunity.
 - ASTF's prior directional probability lift was a heuristic derived from technical features and entry price, not an independently calibrated probability. Directional candidates now fail closed by default with `uncalibrated_probability`; their proxy is labeled diagnostic only. An explicit paper-only opt-in allows tiny discovery probes through the existing exploration budget, never as proven alpha.
 - These changes intentionally reduce trade count. A quiet bot is preferable to manufacturing positive expectancy from uncalibrated probabilities or impossible midpoint fills.
+
+
+## Ziplime package assessment (2026-11-19)
+- Evaluated PyPI `ziplime` 2.12.0 and upstream `Limex-com/ziplime`. It is a modern Polars/asyncio Zipline-derived engine with next-bar execution defaults, vectorized causality checks, point-in-time data windows and explicit cost-model enforcement. These ideas are valuable as a research quality checklist.
+- It is not a drop-in Polymarket engine: its primary model is bar-based instruments and portfolio simulation, while this repository needs token-level binary CLOB books, queue/depth, partial fills, fees and authoritative resolution. Do not replace our paper ledger or install it as a runtime dependency yet.
+- Compatibility: Ziplime requires Python 3.12+, while this repository's runtime/deployment dependency set has not been verified against that baseline. Its GitHub README advertises AGPL-3.0 with an additional permission, while the GitHub repository API and checked-in LICENSE identify GPL-3.0. PyPI metadata and source-tree licensing should be reconciled with the maintainer before adopting or redistributing it. No package has been installed and no new dependency was added.
+- Best use: optionally run it in an isolated research environment to evaluate bar-derived BTC/ETH spot features or compare causal signal calculations. Keep a custom event-driven CLOB replay as the authoritative Polymarket simulator.
