@@ -178,7 +178,7 @@ class PolymarketData:
 
         if value is None:
             value = {
-                "rate": float(default_rate), "exponent": 1.0,
+                "rate": float(default_rate), "exponent": 1.0, "collection": "usdc",
                 "source": "conservative_config_fallback", "verified": False,
             }
         ttl = 300 if value["verified"] else 30
@@ -259,7 +259,7 @@ class PolymarketData:
             return None
 
         fee_info = (
-            {"rate": 0.0, "exponent": 1.0, "source": "gamma_fees_disabled", "verified": True}
+            {"rate": 0.0, "exponent": 1.0, "collection": "usdc", "source": "gamma_fees_disabled", "verified": True}
             if m.get("feesEnabled") is False
             else self.get_fee_schedule(
                 up_token, m.get("conditionId") or m.get("condition_id"), default_rate=0.07
