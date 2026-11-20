@@ -105,3 +105,12 @@ Paper mode only. The dormant live adapter remains disconnected and `run_live()` 
 - Replay now invalidates book state across disconnects and will not mark a book complete until a new full snapshot arrives. Historical exchange-time replay requires a local receive-time cutoff as well; this blocks future-arriving messages from leaking into a past decision.
 - Important boundary: this is a paper-data collector only. It does not connect to the authenticated user channel, submit orders, or change the strategy runtime.
 - Next order: implement collector + gap/reconnect state machine; build deterministic replay executor with book walking and conservative latency; compare order-flow imbalance, microprice, liquidity withdrawal, cross-asset lead/lag and near-resolution signals against a no-trade baseline; only then enable calibrated paper candidates.
+
+
+## Execution fee audit — November 2026
+- Corrected the paper fee model to Polymarket's published share-based formula: `fee = shares × feeRate × p × (1-p)`. The prior implementation incorrectly multiplied the per-share fee term by dollar notional, understating fees by a factor related to entry price.
+- Added `taker_fee_usd` with five-decimal rounding and the documented minimum, corrected notional conversion, and applied the same fee treatment to book-walk entry fills and partial exits.
+- Added fee formula tests for share quantities, notional conversion, symmetry, minimum fee and per-share edge.
+- Hardened CLOB replay: non-finite levels are ignored; a full snapshot after a connection gap resets the exchange-time baseline. A clean snapshot is the authoritative recovery point.
+- Collector reconnects when no WebSocket frame/PONG is received for 25 seconds, rather than trusting an apparently open TCP socket. Exponential backoff resets only after a stable 60-second session.
+- Added collector decoding tests for legacy market-channel book events, batched events and heartbeat frames.
