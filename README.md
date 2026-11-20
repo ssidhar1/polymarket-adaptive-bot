@@ -147,3 +147,18 @@ snapshot alone cannot tell whether disappearing size was canceled or executed,
 so the feature is not labeled as cancellation/withdrawal. Incomplete, one-sided
 and crossed books are rejected. These research features are not yet connected
 to the strategy runtime and do not constitute evidence of predictive edge.
+
+
+## Event-time paper replay
+
+`src/execution/clob_replay.py` replays supplied paper decision intents against
+the public CLOB event journal. Decisions are timestamped using local receive
+time; the engine reads only events received by the decision cutoff, advances
+to the simulated submit cutoff, rejects stale/incomplete books, and uses the
+submit-time ask ladder for a depth-aware paper fill. It records decision-time
+microstructure features separately from submit-time execution conditions.
+
+This is an execution/research harness, not a strategy or profitability claim.
+It is not connected to the live ASTF loop and requires an actual journal dataset
+plus externally supplied decision intents. A supplied resolution price is used
+only for offline paper scoring.
