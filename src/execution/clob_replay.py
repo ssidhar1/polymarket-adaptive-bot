@@ -139,6 +139,8 @@ class CLOBReplayEngine:
             fills.append({
                 "index": index,
                 "decision_id": intent.get("decision_id"),
+                "fee_source": intent.get("fee_source", "unspecified"),
+                "fee_verified": bool(intent.get("fee_verified", False)),
                 "token_id": token_id,
                 "market_id": market_id,
                 "decision_received_ns": decision_ns,
