@@ -173,8 +173,14 @@ class MarketEventJournal:
             if as_of_ms is not None and stamp > int(as_of_ms):
                 continue
             if event_type == "book":
-                # A full snapshot is the authoritative recovery point after
-                # a gap or out-of-order delta; establish a new time baseline.
+                # A full snapshot recovers after a gap, but cannot rewind the
+                # exchange clock after a newer event has already been seen.
+                if last_exchange_ts is not None and stamp < last_exchange_ts:
+                    out_of_order = True
+                    has_snapshot = False
+                    bids, asks = {}, {}
+                    latest_snapshot_received_ns = None
+                    continue
                 bids = _levels(payload.get("bids") or payload.get("buys") or [])
                 asks = _levels(payload.get("asks") or payload.get("sells") or [])
                 has_snapshot = True
