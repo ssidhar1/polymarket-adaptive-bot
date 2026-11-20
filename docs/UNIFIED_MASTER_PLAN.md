@@ -109,7 +109,7 @@ Paper mode only. The dormant live adapter remains disconnected and `run_live()` 
 
 ## Execution fee audit — November 2026
 - Corrected the paper fee model to Polymarket's published share-based formula: `fee = shares × feeRate × p × (1-p)`. The prior implementation incorrectly multiplied the per-share fee term by dollar notional, understating fees by a factor related to entry price.
-- Added `taker_fee_usd` with five-decimal rounding and the documented minimum, corrected notional conversion, and applied the same fee treatment to book-walk entry fills and partial exits.
+- Added `taker_fee_usd` with five-decimal rounding (sub-increment fees can round to zero), corrected notional conversion, and applied price-level fee treatment to book-walk entries and partial exits.
 - Added fee formula tests for share quantities, notional conversion, symmetry, minimum fee and per-share edge.
 - Hardened CLOB replay: non-finite levels are ignored; a full snapshot after a connection gap resets the exchange-time baseline. A clean snapshot is the authoritative recovery point.
 - Collector reconnects when no WebSocket frame/PONG is received for 25 seconds, rather than trusting an apparently open TCP socket. Exponential backoff resets only after a stable 60-second session.
@@ -117,7 +117,7 @@ Paper mode only. The dormant live adapter remains disconnected and `run_live()` 
 
 
 ## Experimental microstructure features — November 2026
-- Added `src/signals/microstructure.py` with deterministic book spread, microprice, top/depth imbalance, order-flow imbalance across changed price levels, and bid/ask liquidity-withdrawal fractions.
+- Added `src/signals/microstructure.py` with deterministic book spread, microprice, top/depth imbalance, best-queue OFI, separate depth deltas, and bid/ask depth-disappearance fractions. Snapshot differences do not prove cancellation.
 - Features reject incomplete, one-sided and crossed/locked books. They are computed from current and prior snapshots only; no probability, alpha claim or trading action is produced.
 - These features are not yet connected to the live ASTF decision loop. Their usefulness must be tested against timestamped replay, realistic execution costs, and out-of-sample periods before any signal weighting is changed.
 - Collector now treats malformed market payloads as skippable input but treats SQLite/storage failures as fatal to the current stream session, forcing reconnect and recording a gap rather than silently dropping data. Dynamic subscription changes are serialized to avoid races with reconnects.
