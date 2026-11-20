@@ -351,7 +351,8 @@ def run_paper(config: dict):
                             if durable and durable["is_open"]:
                                 pos.shares = durable["remaining_quantity"]
                                 pos.entry_price = durable["average_entry_price"]
-                                pos.fee = max(0.0, durable["entry_fees_usd"] - durable["allocated_entry_fees_usd"])
+                                # BUY fee shares are already reflected in the durable basis.
+                                pos.fee = 0.0
                                 pos.size_usd = pos.shares * pos.entry_price
                                 book = data.get_order_book(pos.token_id)
                                 bids = book.get("bids") or []
@@ -666,6 +667,7 @@ def run_paper(config: dict):
                             position_id=order["order_id"], token_id=token,
                             market_id=mid_id, direction=direction, quantity=order["shares"],
                             price=order["fill_price"], fee_usd=order["fee"],
+                            fee_shares=order.get("fee_shares", 0.0),
                             opened_at=entry_opened_at.isoformat(),
                             metadata={**meta, "slug": slug, "end_date": m.get("endDate") or m.get("end_date_iso")},
                             event_id=f"entry:{order['order_id']}",
