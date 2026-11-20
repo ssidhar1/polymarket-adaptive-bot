@@ -1,6 +1,6 @@
 import pytest
 
-from src.utils.fees import edge_after_taker_fee, fee_on_notional, taker_fee_rate, taker_fee_usd
+from src.utils.fees import (edge_after_taker_fee, fee_on_notional, parse_fee_exponent,\n                            parse_fee_schedule, taker_fee_rate, taker_fee_usd)
 
 
 def test_polymarket_fee_formula_is_per_share_not_per_notional():
@@ -28,3 +28,19 @@ def test_five_decimal_rounding_allows_tiny_fees_to_round_to_zero():
 def test_edge_helper_subtracts_fee_per_share():
     expected = 0.60 - 0.50 - (0.07 * 0.50 * 0.50)
     assert edge_after_taker_fee(0.60, 0.50, 0.07) == pytest.approx(expected)
+
+
+def test_explicit_fee_free_market_rate_is_not_replaced_by_default():
+    assert parse_fee_schedule({"_fee_rate": 0.0}, default_rate=0.07) == 0.0
+    assert parse_fee_schedule({"feesEnabled": False}, default_rate=0.07) == 0.0
+
+
+def test_market_fee_exponent_is_parsed():
+    assert parse_fee_exponent({"_fee_exponent": 2.0}) == 2.0
+    assert parse_fee_exponent({"_fee_exponent": float("nan")}) == 1.0
+
+
+def test_non_finite_fee_inputs_fail_closed():
+    assert taker_fee_rate(float("nan"), rate=0.07) == 0.0
+    assert taker_fee_usd(float("inf"), 0.5, rate=0.07) == 0.0
+    assert fee_on_notional(float("nan"), 0.5, rate=0.07) == 0.0
