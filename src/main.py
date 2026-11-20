@@ -143,14 +143,17 @@ def _sync_paper_ledger(tracker: PositionTracker, ledger: PaperExitLifecycle):
             ledger.record_entry_fill(
                 position_id=pos.order_id, token_id=pos.token_id, market_id=pos.market_id,
                 direction=pos.direction, quantity=pos.shares, price=pos.entry_price,
-                fee_usd=pos.fee, opened_at=pos.opened_at.isoformat(),
+                fee_usd=pos.fee, fee_collection=pos.fee_collection,
+                opened_at=pos.opened_at.isoformat(),
                 metadata=metadata, event_id=f"entry:{pos.order_id}",
             )
-            continue
+            durable = ledger.get_position(pos.order_id)
+            if durable is None:
+                continue
         pos.shares = durable["remaining_quantity"]
         pos.entry_price = durable["average_entry_price"]
-        # Buy fees were withheld in shares and are already reflected in the
-        # durable fee-adjusted entry basis; do not charge them again.
+        # Entry fees are already reflected in the durable fee-adjusted basis;
+        # do not charge them again.
         pos.fee = 0.0
         pos.size_usd = pos.shares * pos.entry_price
         if pos.shares <= 1e-9:
