@@ -1,6 +1,7 @@
 import pytest
 
-from src.utils.fees import (edge_after_taker_fee, fee_on_notional, parse_fee_exponent,\n                            parse_fee_schedule, taker_fee_rate, taker_fee_usd)
+from src.utils.fees import (edge_after_taker_fee, fee_on_notional, parse_fee_exponent,
+                            parse_fee_schedule, taker_fee_rate, taker_fee_usd)
 
 
 def test_polymarket_fee_formula_is_per_share_not_per_notional():
