@@ -94,3 +94,12 @@ Paper mode only. The dormant live adapter remains disconnected and `run_live()` 
 
 ### Additional audit: settlement label mapping
 - The resolution checker previously interpreted `outcomePrices[0]` as UP and `outcomePrices[1]` as DOWN, and had a token-winner fallback that also assumed array order. It now maps both outcome prices and token winner records by explicit Up/Down or Yes/No labels. Missing or ambiguous labels fail closed rather than settling a potentially reversed position.
+
+
+## CLOB replay foundation — November 2026
+- Added `src/data/market_event_journal.py`: append-only SQLite storage of raw market-channel payloads, exchange timestamps, local receive timestamps, ingestion order and payload hashes.
+- The replay helper rebuilds a token book from an initial full snapshot plus price-level deltas, including batched multi-token updates. It can cut off by both exchange time and local receive time, which is required to avoid look-ahead when events arrive late.
+- A late older delta is not applied after a newer event; the reconstructed book is marked incomplete. A delta stream without a prior full snapshot is never treated as a complete book.
+- Added per-price-level taker-fee accounting to paper book-walk fills. The Polymarket fee curve is price-dependent, so charging one fee at the aggregate VWAP can misstate fees when the simulated fill consumes multiple price levels.
+- Important boundary: the journal is a tested storage/replay primitive only. A reconnecting WebSocket collector, explicit disconnect/gap events, forced resnapshot on reconnect, event-time strategy replay, and runtime integration are still outstanding. No CLOB data has been collected by this module yet.
+- Next order: implement collector + gap/reconnect state machine; build deterministic replay executor with book walking and conservative latency; compare order-flow imbalance, microprice, liquidity withdrawal, cross-asset lead/lag and near-resolution signals against a no-trade baseline; only then enable calibrated paper candidates.
