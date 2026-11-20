@@ -195,7 +195,7 @@ class PaperExitLifecycle:
                 COALESCE(SUM(fee_shares),0) fee_shares
                 FROM paper_fill_events WHERE position_id=? AND side='BUY'""",
                 (str(position_id),)).fetchone()
-            exits = db.execute("SELECT COALESCE(SUM(quantity),0) q FROM paper_fill_events WHERE position_id='?'",
+            exits = db.execute("SELECT COALESCE(SUM(quantity),0) q FROM paper_fill_events WHERE position_id=?",
                                (str(position_id),)).fetchone()
             settled = db.execute("SELECT COALESCE(SUM(quantity),0) q FROM paper_settlement_events WHERE position_id=?",
                                  (str(position_id),)).fetchone()
