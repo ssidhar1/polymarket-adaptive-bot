@@ -61,6 +61,44 @@ class PaperExitLifecycle:
                 gross_pnl_usd REAL NOT NULL, entry_fee_allocated_usd REAL NOT NULL,
                 net_pnl_usd REAL NOT NULL, created_at TEXT NOT NULL)""")
             db.execute("CREATE INDEX IF NOT EXISTS idx_paper_events_position ON paper_fill_events(position_id,side)")
+            self._reconcile_fee_share_accounting(db)
+
+    @staticmethod
+    def _reconcile_fee_share_accounting(db):
+        """Reprice historical realized rows after BUY-fee shares are recognized."""
+        positions = [row[0] for row in db.execute("SELECT position_id FROM paper_positions")]
+        for position_id in positions:
+            buys = db.execute("""SELECT COALESCE(SUM(quantity),0) gross_q,
+                COALESCE(SUM(quantity*price),0) cost,COALESCE(SUM(fee_usd),0) fees,
+                COALESCE(SUM(fee_shares),0) fee_shares
+                FROM paper_fill_events WHERE position_id=? AND side='BUY'""",
+                (position_id,)).fetchone()
+            net_q = float(buys["gross_q"]) - float(buys["fee_shares"])
+            if net_q <= 1e-12:
+                continue
+            avg = float(buys["cost"]) / net_q
+            entry_fees = float(buys["fees"])
+            sells = db.execute("""SELECT event_id,quantity,price,fee_usd
+                FROM paper_fill_events WHERE position_id=? AND side='SELL'""",
+                (position_id,)).fetchall()
+            for sell in sells:
+                qty = float(sell["quantity"])
+                gross = (float(sell["price"]) - avg) * qty
+                allocated = entry_fees * qty / net_q
+                net = gross - float(sell["fee_usd"])
+                db.execute("""UPDATE paper_fill_events
+                    SET gross_pnl_usd=?,entry_fee_allocated_usd=?,net_pnl_usd=?
+                    WHERE event_id=?""", (gross, allocated, net, sell["event_id"]))
+            settlements = db.execute("""SELECT event_id,quantity,resolution_price
+                FROM paper_settlement_events WHERE position_id=?""",
+                (position_id,)).fetchall()
+            for settlement in settlements:
+                qty = float(settlement["quantity"])
+                gross = (float(settlement["resolution_price"]) - avg) * qty
+                allocated = entry_fees * qty / net_q
+                db.execute("""UPDATE paper_settlement_events
+                    SET gross_pnl_usd=?,entry_fee_allocated_usd=?,net_pnl_usd=?
+                    WHERE event_id=?""", (gross, allocated, gross, settlement["event_id"]))
 
     def record_entry_fill(self, *, position_id, token_id, market_id, direction,
                           quantity, price, fee_usd, fee_shares=None, opened_at=None,
