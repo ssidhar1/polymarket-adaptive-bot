@@ -131,11 +131,11 @@ and exponent, with the token fee-rate endpoint as fallback. Explicit fee-free
 markets remain fee-free; a clearly marked conservative configuration fallback
 is used only when public metadata cannot be resolved.
 
-BUY taker fees are withheld in shares; SELL taker fees are charged in USDC.
-The paper executor therefore records gross purchased shares, fee shares,
-net received shares and a fee-adjusted cost basis. Partial exits, settlement
-and restart recovery operate on net shares. Legacy ledger rows are migrated
-and realized P&L is recalculated to avoid charging the entry fee twice.
+CLOB V2 fees are charged in USDC at match time. The paper executor includes
+that fee in the cash cost basis while retaining the full purchased share
+quantity. An explicit legacy V1 `shares` mode remains available for historical
+fills; the durable ledger stores the collection mode per entry, migrates older
+rows safely, and reconciles realized P&L without double-counting fees.
 
 
 ## Experimental L2 features
@@ -184,6 +184,7 @@ python -m src.research.microstructure_replay \
 ```
 The CLI queries the public token fee-rate endpoint for each token and records
 whether the fee rate was verified; `--fee-rate` is only the fallback if that
-lookup fails. Without externally supplied resolution outcomes, the report
+lookup fails. CLOB V2 uses USDC fee collection by default; `--fee-collection
+shares` is an explicit legacy V1 override. Without externally supplied resolution outcomes, the report
 contains fills and open paper positions but no realized strategy P&L. Do not interpret candidate
 counts or mark-to-market values as validated returns.
