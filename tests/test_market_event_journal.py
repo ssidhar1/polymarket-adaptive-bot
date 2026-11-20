@@ -208,3 +208,32 @@ def test_stale_snapshot_cannot_recover_after_newer_exchange_event(tmp_path):
     book = journal.replay_book("token")
     assert book["complete"] is False
     assert book["out_of_order"] is True
+
+
+def test_non_book_market_events_do_not_advance_token_book_clock(tmp_path):
+    journal = MarketEventJournal(tmp_path / "events.sqlite")
+    journal.append({
+        "event_type": "book", "asset_id": "token", "timestamp": 1000,
+        "bids": [], "asks": [{"price": "0.5", "size": "10"}],
+    }, received_ts_ns=100)
+    journal.append({
+        "event_type": "last_trade_price", "asset_id": "token", "timestamp": 5000,
+        "price": "0.6", "size": "2", "side": "BUY",
+    }, received_ts_ns=200)
+    journal.append({
+        "event_type": "price_change", "timestamp": 1100,
+        "price_changes": [{"asset_id": "other-token", "price": "0.4", "size": "3", "side": "BUY"}],
+    }, received_ts_ns=300)
+    book = journal.replay_book("token")
+    assert book["complete"] is True
+    assert book["last_exchange_ts_ms"] == 1000
+
+
+def test_book_without_matching_asset_id_is_not_applied_to_every_token(tmp_path):
+    journal = MarketEventJournal(tmp_path / "events.sqlite")
+    journal.append({
+        "event_type": "book", "timestamp": 1000,
+        "bids": [], "asks": [{"price": "0.5", "size": "10"}],
+    })
+    book = journal.replay_book("token")
+    assert book["complete"] is False
