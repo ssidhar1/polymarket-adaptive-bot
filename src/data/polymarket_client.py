@@ -49,6 +49,37 @@ def _parse_book_levels(levels: list) -> list:
     return out
 
 
+def _outcome_token_ids(market: Dict) -> Tuple[Optional[str], Optional[str]]:
+    """Map UP/DOWN token IDs from outcome labels; never trust array position."""
+    outcomes = market.get("outcomes")
+    token_ids = market.get("clobTokenIds")
+    if isinstance(outcomes, str):
+        try:
+            outcomes = json.loads(outcomes)
+        except (TypeError, ValueError):
+            outcomes = None
+    if isinstance(token_ids, str):
+        try:
+            token_ids = json.loads(token_ids)
+        except (TypeError, ValueError):
+            token_ids = None
+    if not isinstance(outcomes, list) or not isinstance(token_ids, list):
+        return None, None
+    if len(outcomes) != len(token_ids) or len(outcomes) < 2:
+        return None, None
+
+    up_aliases = {"up", "yes"}
+    down_aliases = {"down", "no"}
+    up = [i for i, label in enumerate(outcomes) if str(label).strip().casefold() in up_aliases]
+    down = [i for i, label in enumerate(outcomes) if str(label).strip().casefold() in down_aliases]
+    if len(up) != 1 or len(down) != 1 or up[0] == down[0]:
+        return None, None
+    up_id, down_id = str(token_ids[up[0]]).strip(), str(token_ids[down[0]]).strip()
+    if not up_id or not down_id or up_id == down_id:
+        return None, None
+    return up_id, down_id
+
+
 def _end_ts(iso: Optional[str]) -> float:
     if not iso:
         return float("inf")
@@ -153,17 +184,16 @@ class PolymarketData:
         if remaining > 45 * 60:
             return None
 
-        token_ids = m.get("clobTokenIds")
-        if isinstance(token_ids, str):
-            try:
-                token_ids = json.loads(token_ids)
-            except Exception:
-                token_ids = []
-        if not isinstance(token_ids, list) or len(token_ids) < 2:
+        up_token, down_token = _outcome_token_ids(m)
+        if not up_token or not down_token:
+            logger.warning(
+                "Skipping market with ambiguous outcome/token mapping: %s",
+                m.get("slug") or m.get("id") or "unknown",
+            )
             return None
 
-        m["_up_token"] = str(token_ids[0])
-        m["_down_token"] = str(token_ids[1])
+        m["_up_token"] = up_token
+        m["_down_token"] = down_token
         m["_asset"] = asset
         m["_series"] = f"{asset}-up-or-down-{label}"
         m["_end_ts"] = end_t
