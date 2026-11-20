@@ -12,7 +12,7 @@
 - **Microprice pressure** — top-of-book queue imbalance contributes a bounded experimental feature
 - **Freshness gates** — stale Binance spot prices and stale order-book snapshots are rejected
 - **Portfolio caps** — total, per-asset, and per-window reserved notional limits
-- **Calibration gate** — heuristic probabilities cannot activate Kelly sizing by default
+- **Calibration gate** — heuristic probability lifts cannot qualify directional entries by default; optional probes are explicitly labeled and capped
 - **Complete-set safety** — arb opportunities are logged but not executed until paired-leg atomicity exists
 - **Setup-bucket learning** — boosts/suppresses by (hour, remaining, vs_open strength)
 - **Regime-conditional pyramiding** — half-size second add, once per market, in favorable regime
@@ -31,7 +31,7 @@ python -m src.main --mode paper
 
 Watch `PROOF`, `ARB WATCH`, stale-data, and risk-pause logs. Mount a persistent volume at `/app/data` before testing; without it, paper state can be lost on redeploy. The default starting bankroll is $1,000 only when no prior state exists. Set `PAPER_RESET_BANKROLL=1` for one restart if you deliberately want to reset, then remove that variable before the next restart.
 
-Paper first. Live locked until expectancy is clear.
+Paper first. Live locked until expectancy is clear. Directional paper entries remain fail-closed until a calibrated probability model is connected; midpoint-only quotes are never treated as executable fills.
 
 Experimental. You can lose money.
 
