@@ -187,5 +187,6 @@ def build_features(
         "side": side,
         "fee_rate": fee_rate,
         "fee_exponent": parse_fee_exponent(market),
+        "fee_collection": market.get("_fee_collection", "usdc"),
         "fee_source": market.get("_fee_source") or ("gamma_fee_schedule" if market.get("feeSchedule") else "config_fallback"),
     }
