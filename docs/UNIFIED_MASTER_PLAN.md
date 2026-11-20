@@ -110,7 +110,7 @@ Paper mode only. The dormant live adapter remains disconnected and `run_live()` 
 ## Execution fee audit — November 2026
 - Corrected the paper fee model to Polymarket's published share-based formula: `fee = shares × feeRate × p × (1-p)`. The prior implementation incorrectly multiplied the per-share fee term by dollar notional, understating fees by a factor related to entry price.
 - Added `taker_fee_usd` with five-decimal rounding (sub-increment fees can round to zero), corrected notional conversion, and applied price-level fee treatment to book-walk entries and partial exits.
-- Added fee formula tests for share quantities, notional conversion, symmetry, minimum fee and per-share edge.
+- Added fee formula tests for share quantities, notional conversion, symmetry, five-decimal rounding (including zero for sub-increment fees), and per-share edge.
 - Hardened CLOB replay: non-finite levels are ignored; a full snapshot after a connection gap resets the exchange-time baseline. A clean snapshot is the authoritative recovery point.
 - Collector reconnects when no WebSocket frame/PONG is received for 25 seconds, rather than trusting an apparently open TCP socket. Exponential backoff resets only after a stable 60-second session.
 - Added collector decoding tests for legacy market-channel book events, batched events and heartbeat frames.
