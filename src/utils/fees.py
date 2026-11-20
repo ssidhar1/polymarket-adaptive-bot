@@ -19,13 +19,14 @@ def taker_fee_rate(price: float, rate: float = 0.07, exponent: int = 1) -> float
 
 def taker_fee_usd(shares: float, price: float, rate: float = 0.07,
                   exponent: int = 1, min_fee: float = 0.00001) -> float:
-    """Calculate fee in USDC, rounded to 5 decimals with the published minimum."""
+    """Calculate fee in USDC, rounded to 5 decimals; sub-increment fees round to zero."""
     quantity = max(0.0, float(shares))
     raw = quantity * taker_fee_rate(price, rate=rate, exponent=exponent)
     if raw <= 0.0:
         return 0.0
-    rounded = round(raw, 5)
-    return max(float(min_fee), rounded)
+    # The published precision is five decimals. Do not impose a minimum
+    # charge: a raw fee below half a 0.00001 increment rounds to zero.
+    return round(raw, 5)
 
 
 def fee_on_notional(notional_usd: float, price: float, rate: float = 0.07) -> float:
