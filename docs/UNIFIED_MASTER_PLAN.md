@@ -123,11 +123,11 @@ Paper mode only. The dormant live adapter remains disconnected and `run_live()` 
 - Collector now treats malformed market payloads as skippable input but treats SQLite/storage failures as fatal to the current stream session, forcing reconnect and recording a gap rather than silently dropping data. Dynamic subscription changes are serialized to avoid races with reconnects.
 
 
-## Buy-fee shares and market-specific fee schedules — November 2026
-- Polymarket's published fee formula is share-based. For BUY taker fills, the fee is withheld in shares; for SELL taker fills, the fee is charged in USDC. The earlier paper ledger treated both as a cash fee and overstated the shares received on buys.
-- Paper execution now records gross shares, USDC-equivalent fee, fee shares, net shares received and fee-adjusted entry basis. Book-walk fees convert each price-level fee to withheld shares at that level's execution price.
-- Durable lifecycle accounting now limits partial exits and settlement to net shares received. Entry fees are included in cost basis and are not subtracted a second time. Legacy databases add/backfill fee-share data and reprice existing realized exit/settlement rows.
-- Fee discovery prefers public CLOB market metadata (fd.r / fd.e), falls back to token /fee-rate basis points, respects explicit Gamma feesEnabled=false, and only then uses a marked conservative configuration fallback. The resolved fee rate/exponent is carried through exit management and restart recovery. Explicit zero rates are not overwritten by truthiness fallbacks.
+## CLOB V2 fee collection and market-specific fee schedules — November 2026
+- CLOB V2 migration documentation and a reported live V2 taker fill indicate that fees are charged in USDC at match time, not withheld from shares. Older V1-era documentation describes share collection on BUY fills, so collection mode must be explicit.
+- Paper execution defaults to V2 USDC collection: fee is included in the cash cost basis while the full purchased share quantity is retained. An explicit legacy V1 share-collection mode remains supported for historical fills.
+- Durable lifecycle accounting stores fee collection mode per entry, combines gross notional plus USDC fees into cost basis, reduces shares only for explicit legacy share-mode fills, and reconciles old realized rows. Entry fees are not subtracted a second time.
+- Fee discovery prefers public CLOB market metadata (fd.r / fd.e), falls back to token /fee-rate basis points, respects explicit Gamma feesEnabled=false, and only then uses a marked conservative configuration fallback. CLOB V2 USDC collection mode, fee rate and exponent are carried through entry, exit management, replay and restart recovery. Explicit zero rates are not overwritten by truthiness fallbacks.
 - Five-decimal rounding allows tiny fees to round to zero; no artificial minimum charge is imposed.
 - Microstructure OFI now uses the standard best-queue price/size transition calculation. Depth changes are kept separate, and disappearance is not mislabeled as cancellation/withdrawal.
 - These fixes improve simulation fidelity, not strategy profitability. The model remains paper-only and still needs recorded data, event-time replay and out-of-sample validation.
