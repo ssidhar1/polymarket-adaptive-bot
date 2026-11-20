@@ -52,10 +52,11 @@ class EnsembleSignal:
         return taker_fee_rate(entry, rate=fee_rate) + entry * self.paper_slippage_bps / 10_000.0
 
     def complete_set_arb(self, up_mid, down_mid, up_ask=None, down_ask=None):
-        up_px = up_ask if up_ask is not None else up_mid
-        down_px = down_ask if down_ask is not None else down_mid
-        if up_px is None or down_px is None:
+        # A complete set is bought at the two executable asks. Midpoints can
+        # never support an arbitrage claim or a fill assumption.
+        if up_ask is None or down_ask is None:
             return None
+        up_px, down_px = float(up_ask), float(down_ask)
         if not (0.02 < up_px < 0.98 and 0.02 < down_px < 0.98):
             return None
         total = up_px + down_px
