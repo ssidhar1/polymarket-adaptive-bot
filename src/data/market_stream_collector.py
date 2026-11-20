@@ -51,7 +51,6 @@ class MarketStreamCollector:
         backoff = self.base_backoff_seconds
         while not self.stop_event.is_set():
             heartbeat = None
-            connected = False
             try:
                 async with websockets.connect(
                     WS_URL, ping_interval=None, close_timeout=5, max_queue=2048
@@ -61,7 +60,6 @@ class MarketStreamCollector:
                         "type": "market",
                         "custom_feature_enabled": self.custom_features,
                     }))
-                    connected = True
                     logger.info("CLOB market stream connected; tokens=%d", len(self.token_ids))
                     heartbeat = asyncio.create_task(self._heartbeat(websocket))
                     async for raw in websocket:
@@ -86,14 +84,16 @@ class MarketStreamCollector:
                         await heartbeat
                     except (asyncio.CancelledError, Exception):
                         pass
-                if connected:
-                    try:
-                        self.journal.record_connection_gap(
-                            self.token_ids,
-                            reason="market websocket disconnected; waiting for fresh snapshots",
-                        )
-                    except Exception as exc:
-                        logger.error("Could not persist connection gap: %s", exc)
+                # Persist a gap even when a reconnect attempt fails before the
+                # socket opens: an older on-disk snapshot must not masquerade
+                # as current while the collector is offline.
+                try:
+                    self.journal.record_connection_gap(
+                        self.token_ids,
+                        reason="market websocket unavailable/disconnected; waiting for fresh snapshots",
+                    )
+                except Exception as exc:
+                    logger.error("Could not persist connection gap: %s", exc)
             if self.stop_event.is_set():
                 break
             try:
