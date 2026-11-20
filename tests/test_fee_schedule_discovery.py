@@ -25,7 +25,7 @@ def test_market_info_fee_schedule_is_preferred_and_cached():
     second = data.get_fee_schedule("token", "condition")
 
     assert first == {
-        "rate": 0.05, "exponent": 1.0,
+        "rate": 0.05, "exponent": 1.0, "collection": "usdc",
         "source": "clob_market_info", "verified": True,
     }
     assert second == first
