@@ -267,6 +267,7 @@ class PolymarketData:
         )
         m["_fee_rate"] = fee_info["rate"]
         m["_fee_exponent"] = fee_info["exponent"]
+        m["_fee_collection"] = fee_info.get("collection", "usdc")
         m["_fee_source"] = fee_info["source"]
         m["_fee_verified"] = fee_info["verified"]
         m["_up_token"] = up_token
