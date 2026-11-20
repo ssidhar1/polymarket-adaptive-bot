@@ -143,3 +143,18 @@ def test_fresh_snapshot_recovers_book_after_out_of_order_event(tmp_path):
     assert book["complete"] is True
     assert book["out_of_order"] is False
     assert book["bids"][0]["price"] == 0.5
+
+
+def test_malformed_delta_container_does_not_break_book_replay(tmp_path):
+    journal = MarketEventJournal(tmp_path / "events.sqlite")
+    journal.append({
+        "event_type": "book", "asset_id": "token", "timestamp": 1000,
+        "bids": [], "asks": [{"price": "0.5", "size": "10"}],
+    })
+    journal.append({
+        "event_type": "price_change", "asset_id": "token", "timestamp": 1100,
+        "price_changes": "malformed",
+    })
+    book = journal.replay_book("token")
+    assert book["complete"] is True
+    assert book["asks"][0]["price"] == 0.5
