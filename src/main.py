@@ -604,7 +604,9 @@ def run_paper(config: dict):
                         )
                         sig, feat, token, entry = candidates[0]
 
-                        is_expl = not sig.get("pass")
+                        # Explicitly enabled uncalibrated entries are tiny
+                        # discovery probes, never alpha-qualified trades.
+                        is_expl = bool(sig.get("paper_probe")) or not sig.get("pass")
                         direction = sig["direction"]
                         edge = sig.get("edge_after_fees")
 
@@ -644,7 +646,7 @@ def run_paper(config: dict):
                                 continue
                             cooldown_until[pyr_key] = now + cooldown_sec * 2
 
-                        trade_type = "expl" if is_expl else "dir"
+                        trade_type = "probe" if sig.get("paper_probe") else ("expl" if is_expl else "dir")
                         meta = _timing_meta(
                             m, feat, sig["score"], edge or 0, mom, regime, trade_type
                         )
