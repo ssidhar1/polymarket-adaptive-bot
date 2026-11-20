@@ -115,7 +115,13 @@ class MarketEventJournal:
         return {"asset_ids": assets, "received_ts_ns": received, "reason": str(reason)[:500]}
 
     def replay_book(self, asset_id, *, as_of_ms=None, received_before_ns=None):
-        """Rebuild a book using only events received by the requested decision time."""
+        """Rebuild a book using only events received by the requested decision time.
+
+        Historical exchange-time replay must also supply a local receive-time
+        cutoff; otherwise late-arriving data and disconnects can leak forward.
+        """
+        if as_of_ms is not None and received_before_ns is None:
+            raise MarketEventError("historical replay requires received_before_ns to prevent look-ahead")
         clauses = ["(asset_id=? OR asset_id='')"]
         args = [str(asset_id)]
         if as_of_ms is not None:
@@ -166,6 +172,8 @@ class MarketEventJournal:
                 # after a newer one would corrupt the reconstructed book.
                 out_of_order = True
                 has_snapshot = False
+                bids, asks = {}, {}
+                latest_snapshot_received_ns = None
                 continue
             if event_type == "book":
                 bids = _levels(payload.get("bids") or payload.get("buys") or [])
