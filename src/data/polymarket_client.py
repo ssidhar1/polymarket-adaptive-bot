@@ -5,6 +5,7 @@ Tries multiple slug patterns so a single rename does not zero markets.
 from typing import List, Dict, Optional, Any, Tuple
 import json
 import logging
+import math
 import time
 import threading
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -111,6 +112,8 @@ class PolymarketData:
         # worker its own pooled Session so independent Gamma requests overlap.
         self._local = threading.local()
         self._working_template: Optional[str] = None
+        self._fee_cache = {}
+        self._fee_cache_lock = threading.Lock()
         logger.info("PolymarketData initialized (multi-slug discovery + CLOB)")
 
     def _get(self, url: str, params: dict = None, timeout: int = 8):
@@ -119,6 +122,69 @@ class PolymarketData:
             session = _build_session()
             self._local.session = session
         return session.get(url, params=params or {}, timeout=timeout)
+
+    def get_fee_schedule(self, token_id: str, condition_id: str = None,
+                         default_rate: float = 0.07) -> Dict[str, Any]:
+        """Resolve the public CLOB fee coefficient for this market/token.
+
+        Prefer CLOB market metadata (fd.r); fall back to the token fee-rate
+        endpoint (base_fee is basis points). Never interpret a valid zero rate
+        as missing. Cache both verified and fallback values briefly.
+        """
+        token = str(token_id or "").strip()
+        condition = str(condition_id or "").strip()
+        key = (condition, token)
+        now = time.monotonic()
+        with self._fee_cache_lock:
+            cached = self._fee_cache.get(key)
+            if cached and cached["expires_at"] > now:
+                return dict(cached["value"])
+
+        value = None
+        if condition:
+            try:
+                response = self._get(f"{CLOB}/markets/{condition}", timeout=6)
+                response.raise_for_status()
+                payload = response.json() or {}
+                fd = payload.get("fd") or payload.get("feeSchedule") or {}
+                if isinstance(fd, dict):
+                    raw_rate = fd.get("r", fd.get("rate"))
+                    if raw_rate is not None:
+                        rate = float(raw_rate)
+                        exponent = float(fd.get("e", fd.get("exponent", 1)) or 1)
+                        if (math.isfinite(rate) and math.isfinite(exponent)
+                                and 0 <= rate <= 0.25 and 0 < exponent <= 4):
+                            value = {
+                                "rate": rate, "exponent": exponent,
+                                "source": "clob_market_info", "verified": True,
+                            }
+            except Exception as exc:
+                logger.debug("CLOB market fee metadata unavailable for %s: %s", condition, exc)
+
+        if value is None and token:
+            try:
+                response = self._get(f"{CLOB}/fee-rate", params={"token_id": token}, timeout=6)
+                response.raise_for_status()
+                payload = response.json() or {}
+                if "base_fee" in payload and payload["base_fee"] is not None:
+                    rate = float(payload["base_fee"]) / 10_000.0
+                    if math.isfinite(rate) and 0 <= rate <= 0.25:
+                        value = {
+                            "rate": rate, "exponent": 1.0,
+                            "source": "clob_fee_rate_bps", "verified": True,
+                        }
+            except Exception as exc:
+                logger.debug("CLOB token fee-rate unavailable for %s: %s", token, exc)
+
+        if value is None:
+            value = {
+                "rate": float(default_rate), "exponent": 1.0,
+                "source": "conservative_config_fallback", "verified": False,
+            }
+        ttl = 300 if value["verified"] else 30
+        with self._fee_cache_lock:
+            self._fee_cache[key] = {"expires_at": now + ttl, "value": dict(value)}
+        return value
 
     def _market_by_slug(self, slug: str) -> Optional[Dict]:
         try:
@@ -192,6 +258,13 @@ class PolymarketData:
             )
             return None
 
+        fee_info = self.get_fee_schedule(
+            up_token, m.get("conditionId") or m.get("condition_id"), default_rate=0.07
+        )
+        m["_fee_rate"] = fee_info["rate"]
+        m["_fee_exponent"] = fee_info["exponent"]
+        m["_fee_source"] = fee_info["source"]
+        m["_fee_verified"] = fee_info["verified"]
         m["_up_token"] = up_token
         m["_down_token"] = down_token
         m["_asset"] = asset
