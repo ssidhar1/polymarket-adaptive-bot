@@ -235,7 +235,7 @@ class EnsembleSignal:
                     "microprice_boost": micro_boost,
                     "twap_lock": twap_lock,
                     "heuristic_edge_proxy": heuristic_edge,
-                    "effective_fee": self._effective_fee(entry, fee_rate),
+                    "effective_fee": self._effective_fee(entry, fee_rate, fee_exponent),
                 },
             }
 
@@ -259,7 +259,7 @@ class EnsembleSignal:
                 "microprice_boost": micro_boost,
                 "twap_lock": twap_lock,
                 "heuristic_edge_proxy": heuristic_edge,
-                "effective_fee": self._effective_fee(entry, fee_rate),
+                "effective_fee": self._effective_fee(entry, fee_rate, fee_exponent),
             },
         }
 
