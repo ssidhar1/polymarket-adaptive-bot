@@ -47,11 +47,12 @@ class EnsembleSignal:
         self.reject_counts.clear()
         return out
 
-    def _effective_fee(self, entry: float, fee_rate: float) -> float:
-        # Aggressive entries pay full taker fees; no assumed maker credit.
-        return taker_fee_rate(entry, rate=fee_rate) + entry * self.paper_slippage_bps / 10_000.0
+    def _effective_fee(self, entry: float, fee_rate: float, fee_exponent: float = 1.0) -> float:
+        # Aggressive entries pay market-specific taker fees; no assumed maker credit.
+        return taker_fee_rate(entry, rate=fee_rate, exponent=fee_exponent) + entry * self.paper_slippage_bps / 10_000.0
 
-    def complete_set_arb(self, up_mid, down_mid, up_ask=None, down_ask=None):
+    def complete_set_arb(self, up_mid, down_mid, up_ask=None, down_ask=None,
+                         fee_rate=None, fee_exponent=1.0):
         # A complete set is bought at the two executable asks. Midpoints can
         # never support an arbitrage claim or a fill assumption.
         if up_ask is None or down_ask is None:
@@ -60,7 +61,8 @@ class EnsembleSignal:
         if not (0.02 < up_px < 0.98 and 0.02 < down_px < 0.98):
             return None
         total = up_px + down_px
-        fee = self._effective_fee(up_px, self.fee_rate) + self._effective_fee(down_px, self.fee_rate)
+        effective_rate = self.fee_rate if fee_rate is None else float(fee_rate)
+        fee = self._effective_fee(up_px, effective_rate, fee_exponent) + self._effective_fee(down_px, effective_rate, fee_exponent)
         edge = 1.0 - total - fee - 0.002
         min_edge = 0.004 if self.degen else 0.008
         if edge > min_edge:
@@ -93,7 +95,8 @@ class EnsembleSignal:
         depth = float(features.get("depth_usd", 0.0) or 0.0)
         window_s = int(features.get("window_seconds", 900) or 900)
         feat_side = str(features.get("side") or "").lower()
-        fee_rate = float(features.get("fee_rate") or self.fee_rate)
+        fee_rate = float(features.get("fee_rate", self.fee_rate))
+        fee_exponent = float(features.get("fee_exponent", 1.0))
         time_left = float(features.get("time_remaining_pct", 0.5) or 0.5)
 
         if depth < self.min_depth_usd:
@@ -194,7 +197,7 @@ class EnsembleSignal:
 
         # This is a heuristic ranking proxy, not an independently estimated
         # probability. It must never be presented as calibrated EV.
-        heuristic_edge = est_prob - entry - self._effective_fee(entry, fee_rate)
+        heuristic_edge = est_prob - entry - self._effective_fee(entry, fee_rate, fee_exponent)
         min_edge = self.min_edge if not self.degen else max(0.008, self.min_edge * 0.60)
         if heuristic_edge < min_edge:
             return self._reject("heuristic_edge_below_costs")
