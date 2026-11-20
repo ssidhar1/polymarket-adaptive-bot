@@ -258,8 +258,12 @@ class PolymarketData:
             )
             return None
 
-        fee_info = self.get_fee_schedule(
-            up_token, m.get("conditionId") or m.get("condition_id"), default_rate=0.07
+        fee_info = (
+            {"rate": 0.0, "exponent": 1.0, "source": "gamma_fees_disabled", "verified": True}
+            if m.get("feesEnabled") is False
+            else self.get_fee_schedule(
+                up_token, m.get("conditionId") or m.get("condition_id"), default_rate=0.07
+            )
         )
         m["_fee_rate"] = fee_info["rate"]
         m["_fee_exponent"] = fee_info["exponent"]
