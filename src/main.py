@@ -83,6 +83,7 @@ def _timing_meta(m: dict, feat: dict, score: float, edge: float, mom: float, reg
         "trade_type": trade_type,
         "fee_rate": float(feat.get("fee_rate", 0.07)),
         "fee_exponent": float(feat.get("fee_exponent", 1.0)),
+        "fee_collection": feat.get("fee_collection", "usdc"),
         "fee_source": feat.get("fee_source", "config_fallback"),
         "vs_open": float(feat.get("vs_open") or 0),
     }
@@ -135,6 +136,7 @@ def _sync_paper_ledger(tracker: PositionTracker, ledger: PaperExitLifecycle):
             "edge_after_fees": pos.edge_after_fees, "momentum": pos.momentum,
             "vs_open": pos.vs_open, "regime": pos.regime, "trade_type": pos.trade_type,
             "fee_rate": pos.fee_rate, "fee_exponent": pos.fee_exponent,
+            "fee_collection": pos.fee_collection,
             "slug": pos.slug, "end_date": pos.end_date,
         }
         if durable is None:
@@ -170,6 +172,7 @@ def _sync_paper_ledger(tracker: PositionTracker, ledger: PaperExitLifecycle):
             "slug": meta.get("slug", ""), "end_date": meta.get("end_date"),
             "fee_rate": meta.get("fee_rate", 0.07),
             "fee_exponent": meta.get("fee_exponent", 1.0),
+            "fee_collection": meta.get("fee_collection", "usdc"),
             **{k: v for k, v in meta.items() if k not in ("slug", "end_date")},
         }
         tracker.import_open([row])
@@ -668,6 +671,7 @@ def run_paper(config: dict):
                             token, "buy", entry, size, mid_id, already_aggressive=True,
                             fee_rate=float(feat.get("fee_rate", fee_rate)),
                             fee_exponent=float(feat.get("fee_exponent", 1.0)),
+                            fee_collection=feat.get("fee_collection", "usdc"),
                             book_asks=selected_book.get("asks") or [],
                         )
                         if not order:
@@ -678,6 +682,7 @@ def run_paper(config: dict):
                             market_id=mid_id, direction=direction, quantity=order["shares"],
                             price=order["fill_price"], fee_usd=order["fee"],
                             fee_shares=order.get("fee_shares", 0.0),
+                            fee_collection=order.get("fee_collection", "usdc"),
                             opened_at=entry_opened_at.isoformat(),
                             metadata={**meta, "slug": slug, "end_date": m.get("endDate") or m.get("end_date_iso")},
                             event_id=f"entry:{order['order_id']}",
