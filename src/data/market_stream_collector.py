@@ -51,6 +51,7 @@ class MarketStreamCollector:
         backoff = self.base_backoff_seconds
         while not self.stop_event.is_set():
             heartbeat = None
+            connected_at = None
             try:
                 async with websockets.connect(
                     WS_URL, ping_interval=None, close_timeout=5, max_queue=2048
@@ -61,8 +62,8 @@ class MarketStreamCollector:
                         "custom_feature_enabled": self.custom_features,
                     }))
                     logger.info("CLOB market stream connected; tokens=%d", len(self.token_ids))
+                    connected_at = time.monotonic()
                     heartbeat = asyncio.create_task(self._heartbeat(websocket))
-                    backoff = self.base_backoff_seconds
                     while not self.stop_event.is_set():
                         # A live TCP socket is not proof that the application
                         # heartbeat is healthy. Force reconnect if PONG/market
@@ -86,6 +87,8 @@ class MarketStreamCollector:
             except Exception as exc:
                 logger.warning("CLOB market stream disconnected: %s", exc)
             finally:
+                if connected_at is not None and time.monotonic() - connected_at >= 60:
+                    backoff = self.base_backoff_seconds
                 if heartbeat is not None:
                     heartbeat.cancel()
                     try:
