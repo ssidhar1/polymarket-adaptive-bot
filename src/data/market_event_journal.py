@@ -6,6 +6,7 @@ without a prior snapshot. It is a research/paper-data component only.
 """
 import hashlib
 import json
+import math
 import sqlite3
 import time
 from pathlib import Path
@@ -33,7 +34,7 @@ def _levels(rows):
             size = float(row.get("size"))
         except (AttributeError, TypeError, ValueError):
             continue
-        if 0 < price < 1 and size >= 0:
+        if math.isfinite(price) and math.isfinite(size) and 0 < price < 1 and size >= 0:
             out[price] = size
     return out
 
@@ -162,12 +163,25 @@ class MarketEventJournal:
                 bids, asks = {}, {}
                 has_snapshot = False
                 latest_snapshot_received_ns = None
+                last_exchange_ts = None
+                out_of_order = False
                 applied += 1
                 continue
             payload = json.loads(row["payload_json"])
             event_type = row["event_type"]
             stamp = int(row["exchange_ts_ms"])
             if as_of_ms is not None and stamp > int(as_of_ms):
+                continue
+            if event_type == "book":
+                # A full snapshot is the authoritative recovery point after
+                # a gap or out-of-order delta; establish a new time baseline.
+                bids = _levels(payload.get("bids") or payload.get("buys") or [])
+                asks = _levels(payload.get("asks") or payload.get("sells") or [])
+                has_snapshot = True
+                out_of_order = False
+                last_exchange_ts = stamp
+                latest_snapshot_received_ns = received_ns
+                applied += 1
                 continue
             if last_exchange_ts is not None and stamp < last_exchange_ts:
                 # Deltas are state transitions. Applying a late older delta
@@ -177,14 +191,7 @@ class MarketEventJournal:
                 bids, asks = {}, {}
                 latest_snapshot_received_ns = None
                 continue
-            if event_type == "book":
-                bids = _levels(payload.get("bids") or payload.get("buys") or [])
-                asks = _levels(payload.get("asks") or payload.get("sells") or [])
-                has_snapshot = True
-                out_of_order = False
-                latest_snapshot_received_ns = received_ns
-                applied += 1
-            elif event_type == "price_change" and has_snapshot:
+            if event_type == "price_change" and has_snapshot:
                 changes = payload.get("price_changes") or payload.get("changes") or []
                 if not isinstance(changes, list):
                     changes = []
