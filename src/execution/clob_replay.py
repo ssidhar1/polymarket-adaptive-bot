@@ -154,12 +154,29 @@ class CLOBReplayEngine:
             float(row["settlement"]["pnl"])
             for row in fills if row.get("settlement") is not None
         ]
+        cumulative = 0.0
+        peak = 0.0
+        max_drawdown = 0.0
+        for pnl in realized:
+            cumulative += pnl
+            peak = max(peak, cumulative)
+            max_drawdown = max(max_drawdown, peak - cumulative)
+        wins = sum(1 for pnl in realized if pnl > 0)
+        losses = sum(1 for pnl in realized if pnl < 0)
+        gross_wins = sum(pnl for pnl in realized if pnl > 0)
+        gross_losses = -sum(pnl for pnl in realized if pnl < 0)
         return {
             "decision_count": len(indexed),
             "filled_count": len(fills),
             "rejected_count": len(rejections),
             "resolved_count": len(realized),
+            "unresolved_count": len(fills) - len(realized),
             "realized_pnl_usd": sum(realized),
+            "mean_pnl_per_resolved_trade_usd": sum(realized) / len(realized) if realized else None,
+            "win_rate": wins / len(realized) if realized else None,
+            "profit_factor": gross_wins / gross_losses if gross_losses > 0 else None,
+            "max_drawdown_usd": max_drawdown,
+            "no_trade_baseline_pnl_usd": 0.0,
             "fills": fills,
             "rejections": rejections,
             "mode": "paper_event_time_replay",
