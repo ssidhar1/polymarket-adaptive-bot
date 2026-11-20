@@ -122,3 +122,24 @@ def test_historical_replay_requires_receive_time_cutoff(tmp_path):
     journal = MarketEventJournal(tmp_path / "events.sqlite")
     with pytest.raises(MarketEventError, match="received_before_ns"):
         journal.replay_book("token", as_of_ms=1000)
+
+
+def test_fresh_snapshot_recovers_book_after_out_of_order_event(tmp_path):
+    journal = MarketEventJournal(tmp_path / "events.sqlite")
+    journal.append({
+        "event_type": "book", "asset_id": "token", "timestamp": 2000,
+        "bids": [], "asks": [{"price": "0.5", "size": "10"}],
+    })
+    journal.append({
+        "event_type": "price_change", "asset_id": "token", "timestamp": 1900,
+        "price_changes": [{"asset_id": "token", "price": "0.49", "size": "2", "side": "BUY"}],
+    })
+    journal.append({
+        "event_type": "book", "asset_id": "token", "timestamp": 2100,
+        "bids": [{"price": "0.50", "size": "8"}],
+        "asks": [{"price": "0.52", "size": "9"}],
+    })
+    book = journal.replay_book("token")
+    assert book["complete"] is True
+    assert book["out_of_order"] is False
+    assert book["bids"][0]["price"] == 0.5
