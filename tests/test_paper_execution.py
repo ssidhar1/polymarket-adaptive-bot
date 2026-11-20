@@ -91,3 +91,24 @@ def test_buy_rejects_ask_ladder_if_best_ask_does_not_match_requested_price():
         book_asks=[{"price": "0.50", "size": "20"}],
     )
     assert order is None
+
+
+
+def test_book_walk_calculates_price_dependent_fee_per_level():
+    executor = PaperExecutor(fee_rate=0.07, slippage_bps=0, max_slippage_bps=200)
+    order = executor.place_order(
+        "token", "buy", 0.50, 8.0, "market",
+        book_asks=[
+            {"price": "0.50", "size": "10"},
+            {"price": "0.51", "size": "10"},
+        ],
+    )
+    assert order is not None
+    first_notional = 5.0
+    second_notional = 3.0
+    expected_fee = (
+        first_notional * taker_fee_rate(0.50, 0.07)
+        + second_notional * taker_fee_rate(0.51, 0.07)
+    )
+    assert order["fee"] == pytest.approx(expected_fee)
+    assert order["fee_frac"] == pytest.approx(expected_fee / 8.0)
