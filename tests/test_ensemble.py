@@ -3,7 +3,7 @@ from src.signals.ensemble import EnsembleSignal
 
 def test_complete_set_arb():
     ens = EnsembleSignal({"signals": {"min_score": 0.6}, "risk": {}})
-    arb = ens.complete_set_arb(0.46, 0.46)
+    arb = ens.complete_set_arb(0.46, 0.46, up_ask=0.46, down_ask=0.46)
     assert arb is not None
     assert arb["type"] == "complete_set"
     assert arb["edge"] > 0
@@ -37,3 +37,9 @@ def test_near_expiry_reject():
     })
     assert out["pass"] is False
     assert out.get("reason") == "near_expiry"
+
+
+def test_complete_set_arb_refuses_midpoints_without_two_asks():
+    ens = EnsembleSignal({"signals": {"min_score": 0.6}, "risk": {}})
+    assert ens.complete_set_arb(0.40, 0.40) is None
+    assert ens.complete_set_arb(0.40, 0.40, up_ask=0.40) is None
