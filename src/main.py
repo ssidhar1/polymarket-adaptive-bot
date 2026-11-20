@@ -143,7 +143,9 @@ def _sync_paper_ledger(tracker: PositionTracker, ledger: PaperExitLifecycle):
             continue
         pos.shares = durable["remaining_quantity"]
         pos.entry_price = durable["average_entry_price"]
-        pos.fee = max(0.0, durable["entry_fees_usd"] - durable["allocated_entry_fees_usd"])
+        # Buy fees were withheld in shares and are already reflected in the
+        # durable fee-adjusted entry basis; do not charge them again.
+        pos.fee = 0.0
         pos.size_usd = pos.shares * pos.entry_price
         if pos.shares <= 1e-9:
             tracker.open.pop(pos.order_id, None)
@@ -160,7 +162,7 @@ def _sync_paper_ledger(tracker: PositionTracker, ledger: PaperExitLifecycle):
             "order_id": durable["position_id"], "market_id": durable["market_id"],
             "token_id": durable["token_id"], "direction": durable["direction"],
             "side": "buy", "entry_price": avg, "size_usd": remaining * avg,
-            "shares": remaining, "fee": entry_fee_remaining, "opened_at": opened.isoformat(),
+            "shares": remaining, "fee": 0.0, "opened_at": opened.isoformat(),
             "slug": meta.get("slug", ""), "end_date": meta.get("end_date"),
             **{k: v for k, v in meta.items() if k not in ("slug", "end_date")},
         }
