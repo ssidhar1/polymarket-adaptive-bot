@@ -139,3 +139,10 @@ Paper mode only. The dormant live adapter remains disconnected and `run_live()` 
 - The journal now exposes the receive time of the last book-changing event, so freshness is based on actual book updates rather than unrelated market/trade messages.
 - Tests cover latency-induced quote changes, exclusion of events arriving after the submit cutoff, disconnects between decision and submit, and stale books.
 - Boundary: this is an offline execution harness. It is not wired into ASTF's signal loop, does not collect data itself, and has no historical strategy results until the collector is run and decisions are generated from a validated strategy.
+
+
+## Microstructure baseline strategy — November 2026
+- Added `src/research/microstructure_replay.py`: generates exploratory paper intents only when normalized best-queue OFI and microprice edge agree, with spread, depth and per-token cooldown filters.
+- It consumes book-update receive-time cutoffs from the journal, resets prior-book state across disconnect gaps, and hands intents to the latency-aware CLOB replay engine.
+- Tests use synthetic book events to verify signal generation, event-time fills, and no OFI inference across a disconnect.
+- This is a baseline for research, not an enabled strategy. Thresholds are not optimized; no live CLOB dataset has been captured in this run; there is no measured hit rate or expectancy. The next meaningful step is to collect real 5m/15m BTC/ETH book data and run chronological walk-forward comparisons against no-trade and simpler baselines.
