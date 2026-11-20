@@ -94,3 +94,25 @@ def test_late_older_delta_invalidates_book_completeness(tmp_path):
     book = journal.replay_book("token")
     assert book["out_of_order"] is True
     assert book["complete"] is False
+
+
+def test_disconnect_invalidates_book_until_fresh_snapshot(tmp_path):
+    journal = MarketEventJournal(tmp_path / "events.sqlite")
+    journal.append({
+        "event_type": "book", "asset_id": "token", "timestamp": 1000,
+        "bids": [{"price": "0.49", "size": "5"}],
+        "asks": [{"price": "0.51", "size": "5"}],
+    }, received_ts_ns=100)
+    journal.record_connection_gap(["token"], reason="socket closed", received_ts_ns=200)
+    stale = journal.replay_book("token")
+    assert stale["complete"] is False
+    assert stale["has_snapshot"] is False
+    assert stale["bids"] == []
+    journal.append({
+        "event_type": "book", "asset_id": "token", "timestamp": 1200,
+        "bids": [{"price": "0.50", "size": "8"}],
+        "asks": [{"price": "0.52", "size": "9"}],
+    }, received_ts_ns=300)
+    recovered = journal.replay_book("token")
+    assert recovered["complete"] is True
+    assert recovered["bids"][0]["price"] == 0.5
