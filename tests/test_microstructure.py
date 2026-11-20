@@ -60,3 +60,17 @@ def test_microstructure_depth_imbalance_uses_multiple_levels():
     assert features["bid_depth"] == 20
     assert features["ask_depth"] == 10
     assert features["depth_imbalance"] == pytest.approx(1 / 3)
+
+
+def test_ofi_counts_new_price_levels_entering_top_of_book():
+    previous = {
+        "bids": [{"price": "0.48", "size": "10"}],
+        "asks": [{"price": "0.52", "size": "10"}],
+    }
+    current = {
+        "bids": [{"price": "0.49", "size": "7"}],
+        "asks": [{"price": "0.51", "size": "6"}],
+    }
+    features = compute_microstructure_features(current, previous)
+    # New bid contributes +7; new ask contributes -6; old levels are removed.
+    assert features["ofi"] == pytest.approx(-9)
