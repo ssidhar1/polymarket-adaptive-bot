@@ -3,6 +3,7 @@ ASTF — Adaptive Short-Term Filter
 Self-learning multi-signal paper trader for Polymarket 5m/15m crypto markets.
 """
 import argparse
+import math
 import signal as os_signal
 import time
 import yaml
@@ -102,9 +103,53 @@ def _save_state(state: StateStore, risk: RiskManager, learner: AdaptiveLearner, 
             "learner": learner.export_state(),
             "open_count": tracker.open_count(),
             "open_positions": tracker.export_open(),
+            "paper_ledger_applied_total": float(getattr(risk, "_paper_ledger_applied_total", 0.0)),
+            "paper_ledger_applied_daily": float(getattr(risk, "_paper_ledger_applied_daily", 0.0)),
+            "paper_ledger_applied_day": str(getattr(risk, "_paper_ledger_applied_day", risk.current_day.isoformat())),
         })
     except Exception as e:
         logger.warning(f"State save failed: {e}")
+
+
+def _mark_paper_ledger_applied(risk: RiskManager, ledger: PaperExitLifecycle):
+    """Checkpoint ledger totals only after the matching risk PnL was applied."""
+    summary = ledger.summary()
+    risk._paper_ledger_applied_total = float(summary["net_realized_pnl_usd"])
+    risk._paper_ledger_applied_daily = float(summary["daily_realized_net_pnl_usd"])
+    risk._paper_ledger_applied_day = str(summary["daily_realized_day_utc"])
+
+
+def _reconcile_paper_ledger_pnl(risk: RiskManager, ledger: PaperExitLifecycle) -> bool:
+    """Recover realized PnL written to SQLite before a crash but not state JSON."""
+    summary = ledger.summary()
+    total = float(summary["net_realized_pnl_usd"])
+    daily = float(summary["daily_realized_net_pnl_usd"])
+    day = risk.current_day.isoformat()
+    applied_total = float(getattr(risk, "_paper_ledger_applied_total", total))
+    applied_day = str(getattr(risk, "_paper_ledger_applied_day", day))
+    applied_daily = float(getattr(risk, "_paper_ledger_applied_daily", daily if applied_day == day else 0.0))
+    if not all(math.isfinite(v) for v in (total, daily, applied_total, applied_daily)):
+        risk.paused = True
+        risk.pause_reason = "Non-finite paper PnL checkpoint; manual reconciliation required"
+        return False
+    if applied_total > total + 1e-6 or (applied_day == day and applied_daily > daily + 1e-6):
+        risk.paused = True
+        risk.pause_reason = "Paper PnL checkpoint exceeds durable ledger; manual reconciliation required"
+        return False
+
+    delta_total = total - applied_total
+    delta_daily = daily - (applied_daily if applied_day == day else 0.0)
+    if abs(delta_total) > 1e-9:
+        risk.bankroll = max(0.0, risk.bankroll + delta_total)
+        risk.peak_bankroll = max(risk.peak_bankroll, risk.bankroll)
+    if abs(delta_daily) > 1e-9:
+        risk.daily_pnl += delta_daily
+
+    risk._paper_ledger_applied_total = total
+    risk._paper_ledger_applied_daily = daily
+    risk._paper_ledger_applied_day = day
+    risk._check_circuit_breakers()
+    return True
 
 
 def _prune_cooldowns(cooldown_until: dict, now: float):
@@ -205,7 +250,11 @@ def run_paper(config: dict):
     state = StateStore(path=_data_dir() / "runtime_state.json")
     saved = state.load()
 
-    if os.getenv("PAPER_RESET_BANKROLL", "").lower() in ("1", "true", "yes"):
+    reset_bankroll = os.getenv("PAPER_RESET_BANKROLL", "").lower() in ("1", "true", "yes")
+    paper_lifecycle = PaperExitLifecycle(_data_dir() / "paper_lifecycle.db")
+    ledger_summary = paper_lifecycle.summary()
+
+    if reset_bankroll:
         start_bank = float(config.get("bankroll", 1000.0))
         logger.warning(f"PAPER_RESET_BANKROLL: starting fresh at ${start_bank:.2f}")
         saved = {}
@@ -225,12 +274,36 @@ def run_paper(config: dict):
             risk._check_circuit_breakers()
         except (TypeError, ValueError):
             logger.warning("Could not restore intraday risk state; keeping conservative defaults")
-    if saved.get("peak_bankroll") and not os.getenv("PAPER_RESET_BANKROLL"):
+    if saved.get("peak_bankroll") and not reset_bankroll:
         try:
             risk.peak_bankroll = max(risk.bankroll, float(saved["peak_bankroll"]))
         except (TypeError, ValueError):
             pass
 
+    today = risk.current_day.isoformat()
+    if reset_bankroll:
+        risk._paper_ledger_applied_total = float(ledger_summary["net_realized_pnl_usd"])
+        risk._paper_ledger_applied_daily = float(ledger_summary["daily_realized_net_pnl_usd"])
+        risk._paper_ledger_applied_day = today
+    elif "paper_ledger_applied_total" in saved:
+        risk._paper_ledger_applied_total = float(saved.get("paper_ledger_applied_total", 0.0))
+        risk._paper_ledger_applied_daily = float(saved.get("paper_ledger_applied_daily", 0.0))
+        risk._paper_ledger_applied_day = str(saved.get("paper_ledger_applied_day") or saved.get("risk_current_day") or today)
+    else:
+        # Backward-compatible migration: old state files have no ledger
+        # checkpoint. Assume their realized PnL was already reflected, avoiding
+        # a duplicate credit; all future commits are crash-recoverable.
+        risk._paper_ledger_applied_total = float(ledger_summary["net_realized_pnl_usd"])
+        risk._paper_ledger_applied_daily = (
+            float(ledger_summary["daily_realized_net_pnl_usd"])
+            if saved.get("risk_current_day") == today else 0.0
+        )
+        risk._paper_ledger_applied_day = str(saved.get("risk_current_day") or today)
+        if not reset_bankroll:
+            logger.warning("Migrating legacy state without a paper-ledger PnL checkpoint")
+
+    if not _reconcile_paper_ledger_pnl(risk, paper_lifecycle):
+        raise SystemExit(risk.pause_reason)
 
     learner = AdaptiveLearner(config)
     learner.import_state(saved.get("learner") or {})
@@ -250,15 +323,14 @@ def run_paper(config: dict):
         max_slippage_bps=float(config.get("execution", {}).get("max_slippage_bps", 30)),
     )
     tracker = PositionTracker()
-    if saved.get("open_positions") and not os.getenv("PAPER_RESET_BANKROLL"):
+    if saved.get("open_positions") and not reset_bankroll:
         try:
             tracker.import_open(saved["open_positions"])
         except Exception as e:
             logger.warning(f"Open position restore failed: {e}")
 
     trade_log = TradeLogger(path=_data_dir() / "trades.db")
-    paper_lifecycle = PaperExitLifecycle(_data_dir() / "paper_lifecycle.db")
-    if os.getenv("PAPER_RESET_BANKROLL", "").lower() in ("1", "true", "yes") and paper_lifecycle.open_positions():
+    if reset_bankroll and paper_lifecycle.open_positions():
         raise SystemExit("Refusing bankroll reset while durable paper positions remain open; settle or close them first")
     _sync_paper_ledger(tracker, paper_lifecycle)
 
@@ -290,6 +362,7 @@ def run_paper(config: dict):
     while not _shutdown:
         try:
             risk.update_bankroll(risk.bankroll)
+            _reconcile_paper_ledger_pnl(risk, paper_lifecycle)
 
             if risk.paused:
                 _save_state(state, risk, learner, tracker)
@@ -339,6 +412,7 @@ def run_paper(config: dict):
                             trade = tracker.resolve(pos.order_id, final)
                             if trade:
                                 risk.record_pnl(trade["pnl"])
+                                _mark_paper_ledger_applied(risk, paper_lifecycle)
                                 learner.log_trade({
                                     "score": trade.get("score", 0.7),
                                     "direction": trade["direction"],
@@ -421,6 +495,7 @@ def run_paper(config: dict):
                                         )
                                         if trade:
                                             risk.record_pnl(trade["pnl"])
+                                            _mark_paper_ledger_applied(risk, paper_lifecycle)
                                             learner.log_trade({
                                                 "score": trade.get("score", 0.7),
                                                 "direction": trade["direction"],

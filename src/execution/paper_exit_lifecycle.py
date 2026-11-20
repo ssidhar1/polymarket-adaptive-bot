@@ -280,6 +280,15 @@ class PaperExitLifecycle:
             settle = db.execute("""SELECT COALESCE(SUM(quantity),0) q,
                 COALESCE(SUM(gross_pnl_usd),0) gross,COALESCE(SUM(net_pnl_usd),0) net
                 FROM paper_settlement_events""").fetchone()
+            today = datetime.now(timezone.utc).date().isoformat()
+            daily_sells = db.execute(
+                """SELECT COALESCE(SUM(net_pnl_usd),0) FROM paper_fill_events
+                   WHERE side='SELL' AND substr(created_at,1,10)=?""", (today,)
+            ).fetchone()[0]
+            daily_settlements = db.execute(
+                """SELECT COALESCE(SUM(net_pnl_usd),0) FROM paper_settlement_events
+                   WHERE substr(created_at,1,10)=?""", (today,)
+            ).fetchone()[0]
         open_count = len(self.open_positions())
         return {
             "fill_events": int(row["fills"]), "entry_shares": float(row["bought"]),
@@ -289,6 +298,8 @@ class PaperExitLifecycle:
             "open_positions": int(open_count),
             "gross_realized_pnl_usd": float(row["gross_pnl"]) + float(settle["gross"]),
             "net_realized_pnl_usd": float(row["net_pnl"]) + float(settle["net"]),
+            "daily_realized_net_pnl_usd": float(daily_sells) + float(daily_settlements),
+            "daily_realized_day_utc": today,
             "fees_usd": float(row["fees"]),
             "pnl_scope": "paper simulation; configured fee/slippage model, not exchange settlement data",
         }
