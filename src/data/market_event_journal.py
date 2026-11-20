@@ -179,6 +179,7 @@ class MarketEventJournal:
                 bids = _levels(payload.get("bids") or payload.get("buys") or [])
                 asks = _levels(payload.get("asks") or payload.get("sells") or [])
                 has_snapshot = True
+                out_of_order = False
                 latest_snapshot_received_ns = received_ns
                 applied += 1
             elif event_type == "price_change" and has_snapshot:
