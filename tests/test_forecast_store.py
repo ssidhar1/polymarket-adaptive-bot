@@ -76,3 +76,41 @@ def test_scorecard_reports_net_costs_calibration_and_drawdown():
     assert score["mean_net_pnl_per_share"] == pytest.approx(-0.32)
     assert score["modeled_fees_per_share_total"] == pytest.approx(0.02)
     assert score["brier_score"] == pytest.approx(0.41)
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [("fees_per_share", float("nan")), ("slippage_per_share", float("inf")),
+     ("fees_per_share", -0.01), ("slippage_per_share", -0.01)],
+)
+def test_forecast_store_rejects_nonfinite_or_negative_costs(tmp_path, field, value):
+    store = ForecastStore(tmp_path / "forecasts.db")
+    observed, resolution = _times()
+    args = dict(
+        forecast_id="invalid-cost", strategy="weekly", market_id="m1",
+        observed_at=observed, resolution_at=resolution, probability_yes=0.5,
+        entry_price=0.5, fees_per_share=0.01, slippage_per_share=0.01,
+    )
+    args[field] = value
+    with pytest.raises(ForecastStoreError):
+        store.record_observation(**args)
+
+
+def test_scorecard_rejects_mixed_strategies_and_duplicate_markets():
+    from src.research.walk_forward import ForecastOutcome
+    observed, resolution = _times()
+    first = ForecastOutcome("weekly", "m1", observed, resolution, 0.9, 0.8, True, 0.01, 0.01)
+    mixed = ForecastOutcome("astf", "m2", observed, resolution, 0.9, 0.8, True, 0.01, 0.01)
+    with pytest.raises(ValueError, match="one strategy"):
+        build_strategy_scorecard([first, mixed])
+    with pytest.raises(ValueError, match="duplicate"):
+        build_strategy_scorecard([first, first])
+
+
+def test_scorecard_uses_json_safe_profit_factor_when_no_losses():
+    from src.research.walk_forward import ForecastOutcome
+    observed, resolution = _times()
+    row = ForecastOutcome("weekly", "m1", observed, resolution, 0.9, 0.5, True, 0.01, 0.01)
+    score = build_strategy_scorecard([row])
+    assert score["profit_factor"] is None
+    assert score["profit_factor_status"] == "no_losses"

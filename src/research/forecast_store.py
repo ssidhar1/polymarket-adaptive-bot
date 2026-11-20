@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import sqlite3
 from datetime import datetime, timezone
 from pathlib import Path
@@ -71,16 +72,26 @@ class ForecastStore:
         resolution = _utc(resolution_at, "resolution_at")
         if not forecast_id or not strategy or not market_id or observed >= resolution:
             raise ForecastStoreError("forecast identity is required and observation must precede resolution")
-        if probability_yes is not None and not 0 <= float(probability_yes) <= 1:
+        try:
+            entry = float(entry_price)
+            fees = float(fees_per_share)
+            slippage = float(slippage_per_share)
+            probability = None if probability_yes is None else float(probability_yes)
+        except (TypeError, ValueError, OverflowError):
+            raise ForecastStoreError("forecast numeric inputs must be valid numbers") from None
+        numeric = [entry, fees, slippage] + ([] if probability is None else [probability])
+        if any(not math.isfinite(value) for value in numeric):
+            raise ForecastStoreError("forecast numeric inputs must be finite")
+        if probability is not None and not 0 <= probability <= 1:
             raise ForecastStoreError("probability_yes must be between zero and one")
-        if not 0 < float(entry_price) < 1:
+        if not 0 < entry < 1:
             raise ForecastStoreError("entry_price must be between zero and one")
-        if float(fees_per_share) < 0 or float(slippage_per_share) < 0:
+        if fees < 0 or slippage < 0:
             raise ForecastStoreError("cost estimates cannot be negative")
         payload = (
             str(forecast_id), str(strategy), str(market_id), observed, resolution,
-            None if probability_yes is None else float(probability_yes),
-            float(entry_price), float(fees_per_share), float(slippage_per_share),
+            probability,
+            entry, fees, slippage,
             json.dumps(metadata or {}, sort_keys=True),
         )
         with self._connect() as db:
