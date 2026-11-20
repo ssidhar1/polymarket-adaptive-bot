@@ -1,7 +1,7 @@
 import pytest
 
 from src.execution.paper import PaperExecutor
-from src.utils.fees import taker_fee_rate
+from src.utils.fees import taker_fee_rate, taker_fee_usd
 
 
 def test_aggressive_fill_pays_taker_fee_even_when_maker_preferred():
@@ -11,7 +11,7 @@ def test_aggressive_fill_pays_taker_fee_even_when_maker_preferred():
     assert order is not None
     assert order["maker"] is False
     assert order["execution_type"] == "taker"
-    assert order["fee_frac"] == pytest.approx(taker_fee_rate(0.50, 0.07))
+    assert order["fee"] == pytest.approx(taker_fee_usd(order["shares"], 0.50, 0.07))
 
 
 def test_buy_fill_applies_adverse_slippage():
@@ -43,7 +43,7 @@ def test_market_specific_fee_rate_overrides_default():
     order = executor.place_order("token", "buy", 0.50, 10.0, "market", fee_rate=0.03)
     assert order is not None
     assert order["fee_rate"] == pytest.approx(0.03)
-    assert order["fee_frac"] == pytest.approx(taker_fee_rate(0.50, 0.03))
+    assert order["fee"] == pytest.approx(taker_fee_usd(order["shares"], 0.50, 0.03))
 
 
 def test_buy_consumes_real_ask_ladder_and_reports_vwap():
@@ -107,8 +107,8 @@ def test_book_walk_calculates_price_dependent_fee_per_level():
     first_notional = 5.0
     second_notional = 3.0
     expected_fee = (
-        first_notional * taker_fee_rate(0.50, 0.07)
-        + second_notional * taker_fee_rate(0.51, 0.07)
+        (first_notional / 0.50) * taker_fee_rate(0.50, 0.07)
+        + (second_notional / 0.51) * taker_fee_rate(0.51, 0.07)
     )
     assert order["fee"] == pytest.approx(expected_fee)
     assert order["fee_frac"] == pytest.approx(expected_fee / 8.0)
