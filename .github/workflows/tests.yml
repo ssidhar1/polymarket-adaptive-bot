@@ -1,23 +1,45 @@
 name: Tests
 
 on:
-  push:
-    branches: [main, "codex/**"]
+  # Run once against the proposed change, rather than once for every commit
+  # pushed directly to main. Use pull requests for code changes and
+  # workflow_dispatch for an intentional manual verification.
   pull_request:
     branches: [main]
+  workflow_dispatch:
+
+# A newer commit on the same PR supersedes the older test run. This prevents
+# stale queued/running CI jobs from flooding notifications during rapid pushes.
+concurrency:
+  group: tests-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
 
 jobs:
   test:
+    name: Python 3.11 tests
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - name: Check out source
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: pip
+
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt pytest
-      - name: Run test suite
+          python -m pip install -r requirements.txt pytest
+          python -m pip check
+
+      - name: Compile source and tests
+        run: python -m compileall -q src tests
+
+      - name: Run full test suite
         run: python -m pytest -q
