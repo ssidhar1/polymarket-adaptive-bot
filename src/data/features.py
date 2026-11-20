@@ -5,7 +5,7 @@ from typing import Dict, Optional, Any
 import logging
 from datetime import datetime, timezone
 
-from src.utils.fees import parse_fee_schedule
+from src.utils.fees import parse_fee_schedule, parse_fee_exponent
 
 logger = logging.getLogger("astf.features")
 
@@ -186,4 +186,6 @@ def build_features(
         "market_slug": slug,
         "side": side,
         "fee_rate": fee_rate,
+        "fee_exponent": parse_fee_exponent(market),
+        "fee_source": market.get("_fee_source") or ("gamma_fee_schedule" if market.get("feeSchedule") else "config_fallback"),
     }
