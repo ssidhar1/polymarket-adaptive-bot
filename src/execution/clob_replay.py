@@ -51,7 +51,9 @@ class CLOBReplayEngine:
 
         Each intent requires token_id, market_id, decision_received_ns and
         notional_usd. Optional fields: decision_id, fee_rate, fee_exponent,
-        resolution_price. A resolution price is only for offline scoring.
+        fee_collection, resolution_price. CLOB V2 defaults to USDC fee
+        collection; "shares" is an explicit legacy V1 compatibility mode.
+        A resolution price is only for offline scoring.
         """
         indexed = list(enumerate(decisions or []))
         indexed.sort(key=lambda pair: (
