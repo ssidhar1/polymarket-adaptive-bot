@@ -90,3 +90,20 @@ runtime; no live orders are connected.
 - Candidate token mapping uses the explicit outcome labels; asks and top-five depth are read from CLOB. Fees and slippage are estimated, not assumed free.
 - Fair probability intentionally remains unknown. The lognormal model is a research primitive only; it is not calibrated or connected to live inputs.
 - Chronological walk-forward scoring rejects look-ahead but does not train models. No weekly strategy paper orders are enabled.
+
+
+## CLOB event journal (paper research foundation)
+
+`src/data/market_event_journal.py` adds an append-only SQLite journal for public
+market-channel events. It preserves the raw JSON payload, SHA-256 payload hash,
+exchange timestamp, local receive timestamp, and ingestion sequence. Its replay
+helper reconstructs L2 books from a full `book` snapshot plus subsequent
+`price_change` deltas, supports receive-time cutoffs to prevent look-ahead,
+handles multi-token delta batches, and marks books incomplete if a late older
+delta arrives after a newer event.
+
+This is a storage/replay primitive, **not yet a connected WebSocket collector or
+runtime signal source**. The next integration step is a reconnecting public market
+channel consumer that subscribes to token IDs, journals every raw event, records
+connection gaps, and requires a fresh snapshot after reconnect before a book can
+be considered complete. Until then, do not claim historical CLOB replay coverage.
