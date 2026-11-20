@@ -495,7 +495,7 @@ def run_paper(config: dict):
                                         )
                                         if trade:
                                             risk.record_pnl(trade["pnl"])
-                                _mark_paper_ledger_applied(risk, paper_lifecycle)
+                                            _mark_paper_ledger_applied(risk, paper_lifecycle)
                                             learner.log_trade({
                                                 "score": trade.get("score", 0.7),
                                                 "direction": trade["direction"],
