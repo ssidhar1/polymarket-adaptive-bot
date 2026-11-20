@@ -122,14 +122,14 @@ claim exists yet.
 
 ## Fee model correction
 
-The paper fee helper follows Polymarket's published share-based formula:
+The paper fee helper follows Polymarket's published share-count formula:
 `fee_usd = shares × fee_rate × price × (1 - price)`. Do not multiply the
 price-dependent fee-per-share term by dollar notional directly. Fees are
 rounded to five decimal places; amounts below the rounding increment can be
-zero. Public CLOB market metadata is queried for the market fee coefficient
-and exponent, with the token fee-rate endpoint as fallback. Explicit fee-free
-markets remain fee-free; a clearly marked conservative configuration fallback
-is used only when public metadata cannot be resolved.
+zero. The production path queries public CLOB V2 market metadata for the fee
+coefficient and exponent. Explicit fee-free markets remain fee-free; if market
+metadata cannot be resolved, a clearly marked conservative configuration
+fallback is used. The legacy `/fee-rate` endpoint is not trusted for V2.
 
 CLOB V2 fees are charged in USDC at match time. The paper executor includes
 that fee in the cash cost basis while retaining the full purchased share
