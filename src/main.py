@@ -482,9 +482,9 @@ def run_paper(config: dict):
                         up_ask = book_up.get("best_ask") or best_ask(book_up)
                         down_ask = book_down.get("best_ask") or best_ask(book_down)
 
-                        if (up_ask is None and up_mid is None) or (
-                            down_ask is None and down_mid is None
-                        ):
+                        # A midpoint is a valuation reference, not a fill.
+                        # Directional BUY entries require an actual ask on that token.
+                        if up_ask is None and down_ask is None:
                             continue
 
                         hist = list(price_history.get(asset, []))
@@ -573,8 +573,8 @@ def run_paper(config: dict):
 
                         candidates = []
                         for sig, feat, token, entry_px in [
-                            (sig_up, feat_up, up_token, up_ask if up_ask is not None else up_mid),
-                            (sig_dn, feat_dn, down_token, down_ask if down_ask is not None else down_mid),
+                            (sig_up, feat_up, up_token, up_ask),
+                            (sig_dn, feat_dn, down_token, down_ask),
                         ]:
                             if entry_px is None:
                                 continue
