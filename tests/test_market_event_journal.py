@@ -188,3 +188,23 @@ def test_non_finite_book_levels_are_ignored(tmp_path):
     assert book["complete"] is True
     assert book["bids"] == []
     assert book["asks"] == [{"price": 0.51, "size": 3.0}]
+
+
+def test_stale_snapshot_cannot_recover_after_newer_exchange_event(tmp_path):
+    journal = MarketEventJournal(tmp_path / "events.sqlite")
+    journal.append({
+        "event_type": "book", "asset_id": "token", "timestamp": 2000,
+        "bids": [], "asks": [{"price": "0.5", "size": "10"}],
+    })
+    journal.append({
+        "event_type": "price_change", "asset_id": "token", "timestamp": 1900,
+        "price_changes": [{"asset_id": "token", "price": "0.49", "size": "2", "side": "BUY"}],
+    })
+    journal.append({
+        "event_type": "book", "asset_id": "token", "timestamp": 1950,
+        "bids": [{"price": "0.49", "size": "2"}],
+        "asks": [{"price": "0.51", "size": "3"}],
+    })
+    book = journal.replay_book("token")
+    assert book["complete"] is False
+    assert book["out_of_order"] is True
