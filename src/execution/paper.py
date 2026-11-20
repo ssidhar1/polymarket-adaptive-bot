@@ -203,7 +203,7 @@ class PaperExecutor:
             "fill_price": fill_price,
             "slippage": slip,
             "slippage_bps": (slip / requested) * 10_000.0,
-            "size_usd": notional,
+            "size_usd": (net_shares * effective_entry_price if side == "buy" else notional),
             "shares": shares,
             "fee_shares": fee_shares,
             "net_shares": net_shares,
