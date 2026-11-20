@@ -65,6 +65,13 @@ class MarketEventJournal:
             )""")
             db.execute("CREATE INDEX IF NOT EXISTS idx_market_events_asset_time ON market_events(asset_id, exchange_ts_ms, ingest_seq)")
             db.execute("CREATE INDEX IF NOT EXISTS idx_market_events_market_time ON market_events(market_id, exchange_ts_ms, ingest_seq)")
+            db.execute("""CREATE TABLE IF NOT EXISTS market_connection_gaps (
+                gap_id INTEGER PRIMARY KEY AUTOINCREMENT,
+                asset_id TEXT NOT NULL,
+                received_ts_ns INTEGER NOT NULL,
+                reason TEXT NOT NULL
+            )""")
+            db.execute("CREATE INDEX IF NOT EXISTS idx_market_gaps_asset_time ON market_connection_gaps(asset_id, received_ts_ns)")
 
     def append(self, payload, received_ts_ns=None):
         if not isinstance(payload, dict):
@@ -94,6 +101,19 @@ class MarketEventJournal:
                     "exchange_ts_ms": exchange_ts_ms, "received_ts_ns": received,
                     "payload_sha256": digest}
 
+    def record_connection_gap(self, asset_ids, *, reason="websocket disconnected", received_ts_ns=None):
+        """Record a feed interruption for each subscribed token."""
+        received = int(received_ts_ns if received_ts_ns is not None else time.time_ns())
+        assets = sorted({str(asset).strip() for asset in asset_ids if str(asset).strip()})
+        if not assets:
+            raise MarketEventError("at least one asset_id is required for a connection gap")
+        with self._connect() as db:
+            db.executemany(
+                "INSERT INTO market_connection_gaps(asset_id,received_ts_ns,reason) VALUES(?,?,?)",
+                [(asset, received, str(reason)[:500]) for asset in assets],
+            )
+        return {"asset_ids": assets, "received_ts_ns": received, "reason": str(reason)[:500]}
+
     def replay_book(self, asset_id, *, as_of_ms=None, received_before_ns=None):
         """Rebuild a book using only events received by the requested decision time."""
         clauses = ["(asset_id=? OR asset_id='')"]
@@ -106,26 +126,52 @@ class MarketEventJournal:
             args.append(int(received_before_ns))
         query = ("SELECT * FROM market_events WHERE " + " AND ".join(clauses)
                  + " ORDER BY ingest_seq ASC")
+        with self._connect() as db:
+            rows = db.execute(query, args).fetchall()
+            gap_query = "SELECT * FROM market_connection_gaps WHERE asset_id=?"
+            gap_args = [str(asset_id)]
+            if received_before_ns is not None:
+                gap_query += " AND received_ts_ns<=?"
+                gap_args.append(int(received_before_ns))
+            gaps = db.execute(gap_query, gap_args).fetchall()
+
+        # Merge events and connection gaps by local arrival time. A disconnect
+        # invalidates the current book until a fresh full snapshot is received.
+        timeline = [(int(row["received_ts_ns"]), 1, int(row["ingest_seq"]), "event", row)
+                    for row in rows]
+        timeline += [(int(gap["received_ts_ns"]), 0, int(gap["gap_id"]), "gap", gap)
+                     for gap in gaps]
+        timeline.sort(key=lambda item: (item[0], item[1], item[2]))
+
         bids, asks = {}, {}
         has_snapshot = False
         last_exchange_ts = None
         out_of_order = False
         applied = 0
-        with self._connect() as db:
-            rows = db.execute(query, args).fetchall()
-        for row in rows:
+        latest_snapshot_received_ns = None
+        for received_ns, _, _, kind, row in timeline:
+            if kind == "gap":
+                bids, asks = {}, {}
+                has_snapshot = False
+                latest_snapshot_received_ns = None
+                applied += 1
+                continue
             payload = json.loads(row["payload_json"])
             event_type = row["event_type"]
             stamp = int(row["exchange_ts_ms"])
+            if as_of_ms is not None and stamp > int(as_of_ms):
+                continue
             if last_exchange_ts is not None and stamp < last_exchange_ts:
                 # Deltas are state transitions. Applying a late older delta
                 # after a newer one would corrupt the reconstructed book.
                 out_of_order = True
+                has_snapshot = False
                 continue
             if event_type == "book":
                 bids = _levels(payload.get("bids") or payload.get("buys") or [])
                 asks = _levels(payload.get("asks") or payload.get("sells") or [])
                 has_snapshot = True
+                latest_snapshot_received_ns = received_ns
                 applied += 1
             elif event_type == "price_change" and has_snapshot:
                 changes = payload.get("price_changes") or payload.get("changes") or []
@@ -155,6 +201,7 @@ class MarketEventJournal:
             "has_snapshot": has_snapshot,
             "complete": has_snapshot and not out_of_order,
             "out_of_order": out_of_order,
+            "latest_snapshot_received_ns": latest_snapshot_received_ns,
             "applied_events": applied,
             "last_exchange_ts_ms": last_exchange_ts,
         }
