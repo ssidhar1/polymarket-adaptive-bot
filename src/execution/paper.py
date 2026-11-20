@@ -32,12 +32,14 @@ class PaperExecutor:
     def __init__(
         self,
         fee_rate: float = 0.07,
+        fee_exponent: float = 1.0,
         extra_slippage: float = 0.0,
         prefer_maker: bool = True,
         slippage_bps: float = 8.0,
         max_slippage_bps: float = 100.0,
     ):
         self.fee_rate = max(0.0, min(0.25, _finite(fee_rate, 0.07)))
+        self.fee_exponent = max(0.1, min(4.0, _finite(fee_exponent, 1.0)))
         self.extra_slippage = max(0.0, _finite(extra_slippage, 0.0))
         # Retained for config compatibility. A maker rebate is never assumed:
         # the caller does not provide evidence of a resting maker fill.
@@ -56,6 +58,7 @@ class PaperExecutor:
         market_id: str,
         already_aggressive: bool = True,
         fee_rate: Optional[float] = None,
+        fee_exponent: Optional[float] = None,
         book_asks: Optional[list] = None,
     ) -> Optional[Dict]:
         if not token_id or not market_id:
@@ -72,6 +75,8 @@ class PaperExecutor:
         if not (0.0 < requested < 1.0) or notional < MIN_NOTIONAL:
             logger.warning(f"PAPER SKIP | price={requested} size={notional}")
             return None
+
+        effective_fee_exponent = self.fee_exponent if fee_exponent is None else max(0.1, min(4.0, _finite(fee_exponent, self.fee_exponent)))
 
         # All current strategy calls are aggressive. If the caller supplies
         # the live ask ladder, consume actual displayed depth and reject a
@@ -113,6 +118,7 @@ class PaperExecutor:
                 level_fee = taker_fee_usd(
                     level_shares, adjusted,
                     rate=self.fee_rate if fee_rate is None else max(0.0, min(0.25, _finite(fee_rate, self.fee_rate))),
+                    exponent=effective_fee_exponent,
                 )
                 ladder_fee += level_fee
                 ladder_fee_shares += level_fee / adjusted
@@ -154,7 +160,7 @@ class PaperExecutor:
         # No maker rebate: aggressive orders cross the spread and pay taker fees.
         effective_fee_rate = self.fee_rate if fee_rate is None else max(0.0, min(0.25, _finite(fee_rate, self.fee_rate)))
         fee = ladder_fee if ladder_fee is not None else taker_fee_usd(
-            shares, fill_price, rate=effective_fee_rate
+            shares, fill_price, rate=effective_fee_rate, exponent=effective_fee_exponent
         )
         # On Polymarket.com, BUY taker fees are deducted in shares; SELL
         # taker fees are deducted in USDC. Keep gross and net share quantities
@@ -190,6 +196,7 @@ class PaperExecutor:
             "fee": fee,
             "fee_frac": fee_frac,
             "fee_rate": effective_fee_rate,
+            "fee_exponent": effective_fee_exponent,
             "maker": False,
             "execution_type": "taker",
             "status": "filled",
