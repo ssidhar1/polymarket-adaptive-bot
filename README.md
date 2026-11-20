@@ -102,7 +102,12 @@ helper reconstructs L2 books from a full `book` snapshot plus subsequent
 handles multi-token delta batches, and marks books incomplete if a late older
 delta arrives after a newer event.
 
-A separate public-channel collector is available:
+A separate public-channel collector is available. For the bot's BTC/ETH 5m/15m
+markets, let it discover and rotate subscriptions automatically:
+```bash
+python -m src.data.market_stream_collector --discover-short-term --db data/clob_events.sqlite
+```
+For a fixed token set:
 ```bash
 python -m src.data.market_stream_collector --tokens TOKEN_ID_1,TOKEN_ID_2 --db data/clob_events.sqlite
 ```
