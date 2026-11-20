@@ -26,7 +26,7 @@ from src.execution.paper import PaperExecutor
 from src.execution.positions import PositionTracker
 from src.execution.exit_policy import evaluate_exit
 from src.execution.paper_exit_lifecycle import PaperExitLifecycle
-from src.utils.fees import taker_fee_rate
+from src.utils.fees import taker_fee_rate, taker_fee_usd
 
 load_dotenv()
 logger = setup_logging(os.getenv("LOG_LEVEL", "INFO"))
@@ -381,7 +381,7 @@ def run_paper(config: dict):
                                     slip_bps = max(0.0, float(exit_cfg.get("slippage_bps", paper_slippage)))
                                     exit_px = bid - bid * slip_bps / 10000.0
                                     if qty * exit_px >= 0.50 and 0 < exit_px < 1:
-                                        exit_fee = qty * exit_px * taker_fee_rate(exit_px, rate=fee_rate)
+                                        exit_fee = taker_fee_usd(qty, exit_px, rate=fee_rate)
                                         prior_exit_qty = durable["exit_quantity"]
                                         event_id = f"sell:{pos.order_id}:{prior_exit_qty + qty:.12f}"
                                         updated = paper_lifecycle.record_exit_fill(
