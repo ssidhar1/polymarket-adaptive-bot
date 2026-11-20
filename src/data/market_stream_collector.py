@@ -65,7 +65,12 @@ class MarketStreamCollector:
                     logger.info("CLOB market stream connected; tokens=%d", len(self.token_ids))
                     heartbeat = asyncio.create_task(self._heartbeat(websocket))
                     async for raw in websocket:
-                        for event in _decode_payload(raw):
+                        try:
+                            events = _decode_payload(raw)
+                        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+                            logger.warning("Skipping malformed WebSocket frame: %s", exc)
+                            continue
+                        for event in events:
                             try:
                                 self.journal.append(event)
                             except Exception as exc:
