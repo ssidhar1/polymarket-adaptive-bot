@@ -11,7 +11,7 @@ import time
 
 import websockets
 
-from src.data.market_event_journal import MarketEventJournal
+from src.data.market_event_journal import MarketEventError, MarketEventJournal
 
 WS_URL = "wss://ws-subscriptions-clob.polymarket.com/ws/market"
 logger = logging.getLogger("astf.market_stream")
@@ -80,8 +80,13 @@ class MarketStreamCollector:
                         for event in events:
                             try:
                                 self.journal.append(event)
-                            except Exception as exc:
+                            except MarketEventError as exc:
                                 logger.warning("Skipping malformed market event: %s", exc)
+                            except Exception as exc:
+                                # Storage errors must not be swallowed as bad
+                                # input: force a reconnect and preserve a gap.
+                                logger.error("CLOB journal write failed: %s", exc)
+                                raise
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
