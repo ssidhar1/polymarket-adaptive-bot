@@ -23,6 +23,8 @@ def generate_microstructure_decisions(
     max_spread_bps=500.0,
     min_total_depth_shares=1.0,
     cooldown_ms=1000,
+    default_fee_rate=0.07,
+    default_fee_exponent=1.0,
 ):
     market_ids = market_ids or {}
     resolution_prices = resolution_prices or {}
@@ -72,8 +74,8 @@ def generate_microstructure_decisions(
                 "market_id": str(market_ids.get(token_id) or token_id),
                 "decision_received_ns": int(received_ns),
                 "notional_usd": float(notional_usd),
-                "fee_rate": float(schedule.get("rate", 0.07)),
-                "fee_exponent": float(schedule.get("exponent", 1.0)),
+                "fee_rate": float(schedule.get("rate", default_fee_rate)),
+                "fee_exponent": float(schedule.get("exponent", default_fee_exponent)),
                 "signal": "positive_ofi_microprice_confirmation",
                 "signal_features": features,
             }
@@ -93,15 +95,22 @@ def run_microstructure_research(
     max_book_age_ms=2000,
     slippage_bps=8,
     max_slippage_bps=30,
+    default_fee_rate=0.07,
+    default_fee_exponent=1.0,
     **strategy_kwargs,
 ):
-    generated = generate_microstructure_decisions(journal, token_ids, **strategy_kwargs)
+    generated = generate_microstructure_decisions(
+        journal, token_ids, default_fee_rate=default_fee_rate,
+        default_fee_exponent=default_fee_exponent, **strategy_kwargs
+    )
     replay = CLOBReplayEngine(
         journal,
         decision_latency_ms=decision_latency_ms,
         max_book_age_ms=max_book_age_ms,
         slippage_bps=slippage_bps,
         max_slippage_bps=max_slippage_bps,
+        default_fee_rate=default_fee_rate,
+        default_fee_exponent=default_fee_exponent,
     ).replay(generated["decisions"])
     return {
         "observations": generated["observations"],
