@@ -78,6 +78,7 @@ class PaperExecutor:
         # requested notional that cannot be filled inside the slippage budget.
         slip = max(self.extra_slippage, requested * self.slippage_bps / 10_000.0)
         ladder_fee = None
+        ladder_fee_shares = 0.0
         if side == "buy" and book_asks is not None:
             remaining = notional
             shares = 0.0
@@ -109,10 +110,12 @@ class PaperExecutor:
                 # Polymarket's fee curve is price-dependent. Applying the fee
                 # once at VWAP is not equivalent when a fill walks multiple
                 # price levels, so calculate each level's fee independently.
-                ladder_fee += taker_fee_usd(
+                level_fee = taker_fee_usd(
                     level_shares, adjusted,
                     rate=self.fee_rate if fee_rate is None else max(0.0, min(0.25, _finite(fee_rate, self.fee_rate))),
                 )
+                ladder_fee += level_fee
+                ladder_fee_shares += level_fee / adjusted
                 spent += spend
                 remaining -= spend
                 if remaining <= max(1e-8, notional * 1e-8):
@@ -153,6 +156,19 @@ class PaperExecutor:
         fee = ladder_fee if ladder_fee is not None else taker_fee_usd(
             shares, fill_price, rate=effective_fee_rate
         )
+        # On Polymarket.com, BUY taker fees are deducted in shares; SELL
+        # taker fees are deducted in USDC. Keep gross and net share quantities
+        # separate so the ledger can audit the fee and settle only received shares.
+        fee_shares = (
+            ladder_fee_shares if ladder_fee is not None
+            else (fee / fill_price if side == "buy" and fill_price > 0 else 0.0)
+        )
+        net_shares = shares - fee_shares if side == "buy" else shares
+        if net_shares <= 0 or not math.isfinite(net_shares):
+            logger.warning("PAPER SKIP | buy fee consumes all received shares")
+            return None
+        effective_entry_price = notional / net_shares if side == "buy" else fill_price
+        residual_fee_usd = 0.0 if side == "buy" else fee
         fee_frac = fee / notional if notional > 0 else 0.0
         order_id = str(uuid.uuid4())[:8]
 
@@ -167,6 +183,10 @@ class PaperExecutor:
             "slippage_bps": (slip / requested) * 10_000.0,
             "size_usd": notional,
             "shares": shares,
+            "fee_shares": fee_shares,
+            "net_shares": net_shares,
+            "effective_entry_price": effective_entry_price,
+            "residual_fee_usd": residual_fee_usd,
             "fee": fee,
             "fee_frac": fee_frac,
             "fee_rate": effective_fee_rate,
@@ -189,7 +209,11 @@ class PaperExecutor:
         order = self.open_orders.pop(order_id)
         resolution = _finite(resolution_price, 0.5)
         resolution = max(0.0, min(1.0, resolution))
-        pnl = (resolution - order["fill_price"]) * order["shares"] - order["fee"]
+        pnl = (
+            (resolution - order.get("effective_entry_price", order["fill_price"]))
+            * order.get("net_shares", order["shares"])
+            - order.get("residual_fee_usd", order["fee"])
+        )
         if not math.isfinite(pnl):
             pnl = -order["fee"]
         trade = {
