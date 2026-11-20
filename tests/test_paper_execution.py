@@ -114,12 +114,25 @@ def test_book_walk_calculates_price_dependent_fee_per_level():
     assert order["fee_frac"] == pytest.approx(expected_fee / 8.0)
 
 
-def test_buy_fee_is_withheld_in_shares_and_basis_is_adjusted():
+def test_v2_buy_fee_is_charged_in_usdc_and_adjusts_cash_basis():
     executor = PaperExecutor(fee_rate=0.07, slippage_bps=0)
     order = executor.place_order("token", "buy", 0.50, 10.0, "market")
     assert order is not None
     assert order["shares"] == pytest.approx(20.0)
     assert order["fee"] == pytest.approx(0.35)
+    assert order["fee_collection"] == "usdc"
+    assert order["fee_shares"] == 0
+    assert order["net_shares"] == pytest.approx(20.0)
+    assert order["effective_entry_price"] == pytest.approx(10.35 / 20.0)
+    resolved = executor.resolve(order["order_id"], 1.0)
+    assert resolved["pnl"] == pytest.approx(9.65)
+
+
+def test_legacy_v1_buy_fee_share_collection_remains_explicitly_supported():
+    executor = PaperExecutor(fee_rate=0.07, slippage_bps=0, fee_collection="shares")
+    order = executor.place_order("token", "buy", 0.50, 10.0, "market")
+    assert order is not None
+    assert order["fee_collection"] == "shares"
     assert order["fee_shares"] == pytest.approx(0.70)
     assert order["net_shares"] == pytest.approx(19.30)
     assert order["effective_entry_price"] == pytest.approx(10.0 / 19.30)
