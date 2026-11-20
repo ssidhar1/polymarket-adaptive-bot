@@ -62,6 +62,8 @@ def walk_forward_evaluate(
     rows = list(records)
     for row in rows:
         validate_forecast(row)
+    if len({row.strategy for row in rows}) > 1:
+        raise ValueError("walk-forward evaluation must be run one strategy at a time")
     rows.sort(key=lambda row: row.observed_at)
     if min_train < 1 or test_size < 1:
         raise ValueError("min_train and test_size must be positive")
