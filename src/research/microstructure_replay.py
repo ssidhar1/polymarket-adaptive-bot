@@ -4,6 +4,8 @@ Signals are exploratory paper intents only. The runner uses only snapshots and
 deltas received by each decision timestamp and delegates delayed book-walk
 execution to CLOBReplayEngine.
 """
+import argparse
+import json
 from src.execution.clob_replay import CLOBReplayEngine
 from src.signals.microstructure import compute_microstructure_features
 
@@ -108,3 +110,43 @@ def run_microstructure_research(
         "research_only": True,
         "strategy": "positive_ofi_microprice_confirmation",
     }
+
+
+
+def main():
+    parser = argparse.ArgumentParser(description="Replay a simple OFI/microprice paper baseline")
+    parser.add_argument("--db", default="data/clob_events.sqlite")
+    parser.add_argument("--tokens", required=True, help="Comma-separated CLOB outcome token IDs")
+    parser.add_argument("--notional", type=float, default=5.0)
+    parser.add_argument("--fee-rate", type=float, default=0.07,
+                        help="Conservative fallback; market-specific fee schedules can be supplied by Python API")
+    parser.add_argument("--latency-ms", type=float, default=250)
+    parser.add_argument("--max-book-age-ms", type=float, default=2000)
+    parser.add_argument("--slippage-bps", type=float, default=8)
+    parser.add_argument("--max-slippage-bps", type=float, default=30)
+    parser.add_argument("--min-ofi", type=float, default=0.15)
+    parser.add_argument("--min-microprice-bps", type=float, default=1.0)
+    parser.add_argument("--max-spread-bps", type=float, default=500)
+    parser.add_argument("--cooldown-ms", type=float, default=1000)
+    args = parser.parse_args()
+
+    from src.data.market_event_journal import MarketEventJournal
+    journal = MarketEventJournal(args.db)
+    result = run_microstructure_research(
+        journal, [token.strip() for token in args.tokens.split(",") if token.strip()],
+        notional_usd=args.notional,
+        min_ofi_normalized=args.min_ofi,
+        min_microprice_edge_bps=args.min_microprice_bps,
+        max_spread_bps=args.max_spread_bps,
+        cooldown_ms=args.cooldown_ms,
+        decision_latency_ms=args.latency_ms,
+        max_book_age_ms=args.max_book_age_ms,
+        slippage_bps=args.slippage_bps,
+        max_slippage_bps=args.max_slippage_bps,
+        default_fee_rate=args.fee_rate,
+    )
+    print(json.dumps(result, indent=2, sort_keys=True, allow_nan=False))
+
+
+if __name__ == "__main__":
+    main()
