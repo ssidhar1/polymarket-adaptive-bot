@@ -1,9 +1,8 @@
 """Durable paper-only entry/exit fill journal and realized-P&L ledger.
 
-Polymarket.com BUY taker fees are deducted in shares, while SELL taker fees
-are deducted in USDC. The ledger stores gross purchased shares plus fee shares,
-then computes basis over the net shares actually received. Entry fee USD remains
-an audit/reporting value and is not subtracted a second time from P&L.
+CLOB V2 fees are modeled as USDC cash costs by default. An explicit legacy
+"shares" mode remains available for V1-era fills. The ledger normalizes both
+modes into net shares and fee-adjusted cost basis for correct P&L.
 """
 import json
 import sqlite3
@@ -180,7 +179,7 @@ class PaperExitLifecycle:
                 "realized_gross_pnl_usd": float(sells["gross"]) + float(settles["gross"]),
                 "realized_net_pnl_usd": float(sells["net"]) + float(settles["net"]),
                 "exit_fees_usd": float(sells["fees"]),
-                # Audit allocation only: buy fees are already reflected in
+                # Audit allocation only: entry fees are already reflected in
                 # the higher cost basis per net share, so never subtract twice.
                 "allocated_entry_fees_usd": float(sells["entry_fees"]) + float(settles["entry_fees"]),
                 "is_open": remaining > 1e-9,
@@ -219,7 +218,7 @@ class PaperExitLifecycle:
             avg = (float(buys["cost"]) + float(buys["cash_fees"])) / total_q
             entry_fee_alloc = float(buys["fees"]) * q / total_q
             gross = (p - avg) * q
-            # BUY fees were withheld in shares and are included in avg basis.
+            # Entry fees are included in the fee-adjusted average basis.
             # Only the SELL-side USDC fee is deducted here.
             net = gross - fee
             db.execute("""INSERT INTO paper_fill_events
@@ -256,7 +255,7 @@ class PaperExitLifecycle:
             remaining = total_q - float(exits["q"]) - float(settled["q"])
             if total_q <= 0 or remaining <= 1e-9:
                 raise PaperLifecycleError("no remaining shares to settle")
-            avg = float(buys["cost"]) / total_q
+            avg = (float(buys["cost"]) + float(buys["cash_fees"])) / total_q
             allocated = float(buys["fees"]) * remaining / total_q
             gross = (price - avg) * remaining
             net = gross
