@@ -25,7 +25,7 @@ def test_microstructure_ofi_detects_bid_addition_and_ask_withdrawal():
     }
     current = {
         "complete": True,
-        "bids": [{"price": "0.49", "size": "15"}],
+        "bids": [{"price": "0.50", "size": "15"}],
         "asks": [{"price": "0.51", "size": "5"}],
     }
     features = compute_microstructure_features(current, previous)
