@@ -41,6 +41,10 @@ def test_replay_uses_submit_time_book_after_configured_latency(tmp_path):
     assert fill["order"]["fill_price"] == pytest.approx(0.52)
     assert fill["settlement"]["pnl"] == pytest.approx((5 / 0.52) - 5)
     assert fill["decision_features"]["valid"] is True
+    assert result["resolved_count"] == 1
+    assert result["unresolved_count"] == 0
+    assert result["win_rate"] == 1.0
+    assert result["max_drawdown_usd"] == 0.0
 
 
 def test_replay_does_not_leak_events_received_after_submit_cutoff(tmp_path):
@@ -64,6 +68,8 @@ def test_replay_does_not_leak_events_received_after_submit_cutoff(tmp_path):
 
     assert result["filled_count"] == 1
     assert result["fills"][0]["order"]["requested_price"] == pytest.approx(0.50)
+    assert result["unresolved_count"] == 1
+    assert result["mean_pnl_per_resolved_trade_usd"] is None
 
 
 def test_replay_rejects_connection_gap_between_decision_and_submit(tmp_path):
