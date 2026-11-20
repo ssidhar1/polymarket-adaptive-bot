@@ -43,26 +43,28 @@ class MarketStreamCollector:
         self.max_backoff_seconds = max(self.base_backoff_seconds, float(max_backoff_seconds))
         self.stop_event = asyncio.Event()
         self.websocket = None
+        self._subscription_lock = asyncio.Lock()
 
     async def update_tokens(self, token_ids):
         """Update subscriptions without reconnecting; invalidate removed-token books."""
         updated = sorted({str(token).strip() for token in token_ids if str(token).strip()})
         if not updated:
             return {"added": [], "removed": []}
-        old, new = set(self.token_ids), set(updated)
-        added, removed = sorted(new - old), sorted(old - new)
-        self.token_ids = updated
-        if removed:
-            self.journal.record_connection_gap(
-                removed, reason="token unsubscribed; no longer receiving live updates"
-            )
-        ws = self.websocket
-        if ws is not None:
-            if added:
-                await ws.send(json.dumps({"assets_ids": added, "operation": "subscribe"}))
+        async with self._subscription_lock:
+            old, new = set(self.token_ids), set(updated)
+            added, removed = sorted(new - old), sorted(old - new)
+            self.token_ids = updated
             if removed:
-                await ws.send(json.dumps({"assets_ids": removed, "operation": "unsubscribe"}))
-        return {"added": added, "removed": removed}
+                self.journal.record_connection_gap(
+                    removed, reason="token unsubscribed; no longer receiving live updates"
+                )
+            ws = self.websocket
+            if ws is not None:
+                if added:
+                    await ws.send(json.dumps({"assets_ids": added, "operation": "subscribe"}))
+                if removed:
+                    await ws.send(json.dumps({"assets_ids": removed, "operation": "unsubscribe"}))
+            return {"added": added, "removed": removed}
 
     async def _heartbeat(self, websocket):
         while True:
@@ -78,12 +80,13 @@ class MarketStreamCollector:
                 async with websockets.connect(
                     WS_URL, ping_interval=None, close_timeout=5, max_queue=2048
                 ) as websocket:
-                    await websocket.send(json.dumps({
-                        "assets_ids": self.token_ids,
-                        "type": "market",
-                        "custom_feature_enabled": self.custom_features,
-                    }))
-                    self.websocket = websocket
+                    async with self._subscription_lock:
+                        await websocket.send(json.dumps({
+                            "assets_ids": self.token_ids,
+                            "type": "market",
+                            "custom_feature_enabled": self.custom_features,
+                        }))
+                        self.websocket = websocket
                     logger.info("CLOB market stream connected; tokens=%d", len(self.token_ids))
                     connected_at = time.monotonic()
                     heartbeat = asyncio.create_task(self._heartbeat(websocket))
@@ -115,7 +118,8 @@ class MarketStreamCollector:
             except Exception as exc:
                 logger.warning("CLOB market stream disconnected: %s", exc)
             finally:
-                self.websocket = None
+                async with self._subscription_lock:
+                    self.websocket = None
                 if connected_at is not None and time.monotonic() - connected_at >= 60:
                     backoff = self.base_backoff_seconds
                 if heartbeat is not None:
@@ -182,6 +186,11 @@ async def _main(args):
     if data is not None:
         discovered = await _discover_tokens(data)
         tokens = sorted(set(tokens) | set(discovered))
+    while not tokens and data is not None:
+        logger.info("No active short-term markets found; retrying discovery in %.0f seconds",
+                    args.discovery_interval)
+        await asyncio.sleep(max(5.0, args.discovery_interval))
+        tokens = await _discover_tokens(data)
     if not tokens:
         raise SystemExit("Provide --tokens or use --discover-short-term when markets are active")
     collector = MarketStreamCollector(
