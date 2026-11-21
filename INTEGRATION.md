@@ -1,47 +1,29 @@
 # Integration Status
 
 ## Done
-- `src/learning/calibrated.py` — online calibrated probability model
-- `src/signals/ensemble.py` — near-resolution sleeve + calibrated_prob support
-- `config.example.yaml` — `near_resolution_boost`, `execute_complete_set`, tighter defaults
-- README updated
+- Online calibrated probability model (`src/learning/calibrated.py`)
+- Near-resolution / TWAP-lock sleeve in ensemble
+- Complete-set execution path (flag-gated)
+- Config flags enabled
+- One-command integration script
 
-## Remaining (main.py)
-Apply these three changes to `src/main.py`:
-
-### 1. Import + instantiate
-```python
-from src.learning.calibrated import CalibratedProbabilityModel
-...
-learner = AdaptiveLearner(config)
-calibrator = CalibratedProbabilityModel(min_samples=18)
+## Apply everything in one step
+```bash
+git pull
+python scripts/apply_integration.py
+# review src/main.py
+git add src/main.py && git commit -m "Wire calibrator and complete-set" && git push
 ```
+Then redeploy Northflank.
 
-### 2. Observe on resolves
-After every non-stale `learner.log_trade(...)` block, add:
-```python
-calibrator.observe(trade)
-```
+## What it enables
+- Empirical calibration after ~15 resolves
+- Near-resolution overrides on strong late setups
+- Complete-set paper execution when `execute_complete_set: true` and edge > 0.003
 
-### 3. Pass calibrated probability
-Replace the directional_score calls with:
-```python
-cal_prob = calibrator.calibrate(
-    heuristic_prob=0.52,
-    hour=datetime.now(timezone.utc).hour,
-    remaining_s=float(feat.get("time_remaining_s") or 300),
-    strength=vs_open,
-)
-sig = ensemble.directional_score(feat, preferred_side=..., calibrated_prob=cal_prob)
-```
+## Next after this
+1. Let it run 30–50 resolves and watch for `probability_kind=calibrated` and `ARB EXECUTE` lines.
+2. Flip `strategy_portfolio.enabled: true` once two sleeves show positive expectancy.
+3. Add maker quoting loop (prefer_maker already on) for rebate harvesting.
 
-### 4. Complete-set execution
-When `config["execution"].get("execute_complete_set")` is true and `arb_watch["edge"] > 0.0035`,
-place both paper legs at the actual asks (up and down) using the existing `executor.place_order` + `tracker.add` path.
-
-Once those four points are in, the bot will:
-- Use empirical calibration when samples exist
-- Run the near-resolution sleeve
-- Execute complete-set arbs in paper mode
-
-Redeploy after the main.py update.
+Paper first. Live locked.
