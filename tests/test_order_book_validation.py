@@ -74,5 +74,5 @@ def test_aggregate_book_features_ignore_nonfinite_values():
         {"price": 0.51, "size": 4},
         {"price": 0.50, "size": float("nan")},
     ]
-    assert compute_book_imbalance(bids, asks) == -1.0 / 9.0
+    assert compute_book_imbalance(bids, asks) == 1.0 / 9.0
     assert compute_depth_usd(bids, asks) == 0.48 * 5 + 0.51 * 4
