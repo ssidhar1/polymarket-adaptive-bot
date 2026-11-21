@@ -71,3 +71,23 @@ def test_pnl_checkpoint_ahead_of_ledger_pauses_trading(tmp_path):
     assert _reconcile_paper_ledger_pnl(risk, ledger) is False
     assert risk.paused is True
     assert "checkpoint exceeds durable ledger" in risk.pause_reason
+
+
+
+@pytest.mark.parametrize("features", [
+    {},
+    {"book_valid": False, "ask_price": 0.50},
+    {"book_valid": True, "ask_price": None},
+    {"book_valid": True, "ask_price": float("nan")},
+    {"book_valid": True, "ask_price": float("inf")},
+    {"book_valid": True, "ask_price": 0.0},
+    {"book_valid": True, "ask_price": 1.0},
+])
+def test_paper_entry_quote_requires_validated_finite_book(features):
+    assert main._validated_entry_quote(features) is None
+
+
+def test_paper_entry_quote_uses_only_validated_best_ask():
+    assert main._validated_entry_quote({
+        "book_valid": True, "ask_price": 0.43,
+    }) == pytest.approx(0.43)
