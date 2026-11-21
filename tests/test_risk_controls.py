@@ -53,10 +53,35 @@ def test_daily_loss_pause_is_not_cleared_by_restart_api():
     assert not risk.can_open(10)
 
 
-def test_entry_fee_buffer_is_included_before_exposure_caps():
+def test_entry_fee_buffer_uses_exact_price_and_fractional_exponent():
     risk = _risk()
     tracker = PositionTracker()
-    # A $38 entry at a 7% fee coefficient can consume up to $40.66,
-    # so it must not pass a $40 max-position cap.
-    assert not _can_open_for_market(risk, tracker, 38.0, 0, "btc", "5m", fee_rate=0.07)
-    assert _can_open_for_market(risk, tracker, 37.0, 0, "btc", "5m", fee_rate=0.07)
+    # With p=.01 and exponent=.5, the fee/notional ratio is ~69.6%;
+    # a $25 entry therefore exceeds the $40 per-position cap after fees.
+    assert not _can_open_for_market(
+        risk, tracker, 25.0, 0, "btc", "5m",
+        fee_rate=0.07, fee_exponent=0.5, entry_price=0.01,
+    )
+    assert _can_open_for_market(
+        risk, tracker, 20.0, 0, "btc", "5m",
+        fee_rate=0.07, fee_exponent=0.5, entry_price=0.01,
+    )
+
+
+def test_share_collected_entry_fee_does_not_double_reserve_cash():
+    risk = _risk()
+    tracker = PositionTracker()
+    assert _can_open_for_market(
+        risk, tracker, 39.0, 0, "btc", "5m",
+        fee_rate=0.07, fee_exponent=0.5, entry_price=0.01,
+        fee_collection="shares",
+    )
+
+
+def test_invalid_fee_metadata_blocks_entry_risk_check():
+    risk = _risk()
+    tracker = PositionTracker()
+    assert not _can_open_for_market(
+        risk, tracker, 10.0, 0, "btc", "5m",
+        fee_rate=float("nan"), entry_price=0.5,
+    )
