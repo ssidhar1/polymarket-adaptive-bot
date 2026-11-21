@@ -71,9 +71,22 @@ def test_price_feed_rejects_nonfinite_spot_values_and_cached_prices(monkeypatch)
 
 def test_price_feed_ignores_nonfinite_klines_and_returns():
     feed = price_feed.PriceFeed()
-    feed._fetch_klines = lambda *args, **kwargs: [
-        100.0, float("nan"), 101.0, float("inf"), 102.0, 103.0,
-    ]
+
+    class Response:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return [
+                [0, 0, 0, 0, "100.0"],
+                [0, 0, 0, 0, "nan"],
+                [0, 0, 0, 0, "101.0"],
+                [0, 0, 0, 0, "inf"],
+                [0, 0, 0, 0, "102.0"],
+                [0, 0, 0, 0, "103.0"],
+            ]
+
+    feed.session.get = lambda *args, **kwargs: Response()
     closes = feed._fetch_klines("BTCUSDT")
     assert closes == [100.0, 101.0, 102.0, 103.0]
     assert feed._ret([100.0, float("nan"), 102.0], 1) == 0.0
