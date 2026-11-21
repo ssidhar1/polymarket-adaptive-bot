@@ -27,7 +27,7 @@ from src.execution.paper import PaperExecutor
 from src.execution.positions import PositionTracker
 from src.execution.exit_policy import evaluate_exit
 from src.execution.paper_exit_lifecycle import PaperExitLifecycle
-from src.utils.fees import taker_fee_usd
+from src.utils.fees import taker_fee_usd, taker_fee_rate
 
 load_dotenv()
 logger = setup_logging(os.getenv("LOG_LEVEL", "INFO"))
@@ -158,21 +158,45 @@ def _prune_cooldowns(cooldown_until: dict, now: float):
         del cooldown_until[k]
 
 
+def _validated_entry_quote(features: dict):
+    """Return an executable ask only when it came from a validated two-sided book."""
+    if not isinstance(features, dict) or not features.get("book_valid"):
+        return None
+    try:
+        ask = float(features.get("ask_price"))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return ask if math.isfinite(ask) and 0.0 < ask < 1.0 else None
+
+
 def _can_open_for_market(
     risk, tracker, size: float, open_count: int, asset: str, window: str,
-    fee_rate: float = 0.0,
+    fee_rate: float = 0.0, fee_exponent: float = 1.0,
+    entry_price: float = 0.5, fee_collection: str = "usdc",
 ) -> bool:
     positions = tracker.get_open_list()
     reserved = sum(float(p.size_usd) for p in positions)
     asset_used = sum(float(p.size_usd) for p in positions if p.asset == asset)
     window_used = sum(float(p.size_usd) for p in positions if p.window == window)
-    # Reserve a conservative upper bound for entry fees. For the supported
-    # binary price domain, the per-share fee as a fraction of notional cannot
-    # exceed the fee coefficient. This prevents fees pushing a fill over caps.
     try:
-        fee_buffer_rate = max(0.0, min(0.25, float(fee_rate)))
-    except (TypeError, ValueError):
-        fee_buffer_rate = 0.25
+        rate = float(fee_rate)
+        exponent = float(fee_exponent)
+        price = float(entry_price)
+        collection = str(fee_collection).lower()
+    except (TypeError, ValueError, OverflowError):
+        return False
+    if (not math.isfinite(rate) or not 0.0 <= rate <= 0.25
+            or not math.isfinite(exponent) or not 0.0 < exponent <= 4.0
+            or not math.isfinite(price) or not 0.0 < price < 1.0
+            or collection not in ("usdc", "shares")):
+        return False
+    # USDC fees consume additional bankroll. Calculate their exact fraction
+    # of entry notional at this price/exponent; the fee coefficient alone is
+    # not a valid bound for fractional exponents below 1.
+    fee_buffer_rate = (
+        taker_fee_rate(price, rate=rate, exponent=exponent) / price
+        if collection == "usdc" else 0.0
+    )
     risk_notional = float(size) * (1.0 + fee_buffer_rate)
     return risk.can_open(
         risk_notional, open_count=open_count, reserved_exposure=reserved,
@@ -460,7 +484,8 @@ def run_paper(config: dict):
                                             level_price, level_size = float(level.get("price") or 0), float(level.get("size") or 0)
                                         else:
                                             level_price, level_size = float(level[0]), float(level[1])
-                                        if 0 < level_price < 1 and level_size > 0:
+                                        if (math.isfinite(level_price) and math.isfinite(level_size)
+                                                and 0 < level_price < 1 and level_size > 0):
                                             parsed_bids.append((level_price, level_size))
                                     except (TypeError, ValueError, IndexError):
                                         continue
@@ -677,17 +702,15 @@ def run_paper(config: dict):
                         sig_dn = ensemble.directional_score(feat_dn, preferred_side="down")
 
                         candidates = []
-                        for sig, feat, token, entry_px in [
-                            (sig_up, feat_up, up_token, up_ask),
-                            (sig_dn, feat_dn, down_token, down_ask),
+                        for sig, feat, token in [
+                            (sig_up, feat_up, up_token),
+                            (sig_dn, feat_dn, down_token),
                         ]:
-                            if entry_px is None:
-                                continue
-                            try:
-                                entry_f = float(entry_px)
-                            except (TypeError, ValueError):
-                                continue
-                            if entry_f <= 0 or entry_f >= 1:
+                            # Do not execute from the raw book quote. The
+                            # feature builder must first validate a finite,
+                            # two-sided, uncrossed book and derive its ask.
+                            entry_f = _validated_entry_quote(feat)
+                            if entry_f is None:
                                 continue
                             if not sig.get("pass") and not (
                                 regime == "favorable"
@@ -738,7 +761,7 @@ def run_paper(config: dict):
                             edge_after_fees=edge,
                             regime=regime,
                         )
-                        if size <= 0 or not _can_open_for_market(risk, tracker, size, open_n, asset, str(m.get("_window") or ""), fee_rate=float(feat.get("fee_rate", fee_rate))):
+                        if size <= 0 or not _can_open_for_market(risk, tracker, size, open_n, asset, str(m.get("_window") or ""), fee_rate=float(feat.get("fee_rate", fee_rate)), fee_exponent=float(feat.get("fee_exponent", 1.0)), entry_price=entry, fee_collection=feat.get("fee_collection", "usdc")):
                             continue
 
                         # Regime-conditional pyramid (once per market)
@@ -747,7 +770,7 @@ def run_paper(config: dict):
                         if (regime == "favorable" and existing and len(existing) == 1
                             and cooldown_until.get(pyr_key, 0) <= now):
                             size = size * 0.50
-                            if not _can_open_for_market(risk, tracker, size, open_n, asset, str(m.get("_window") or ""), fee_rate=float(feat.get("fee_rate", fee_rate))):
+                            if not _can_open_for_market(risk, tracker, size, open_n, asset, str(m.get("_window") or ""), fee_rate=float(feat.get("fee_rate", fee_rate)), fee_exponent=float(feat.get("fee_exponent", 1.0)), entry_price=entry, fee_collection=feat.get("fee_collection", "usdc")):
                                 continue
                             cooldown_until[pyr_key] = now + cooldown_sec * 2
 

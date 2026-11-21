@@ -3,6 +3,7 @@ External price feed with multi-timeframe momentum and bounded outage backoff.
 """
 from typing import Dict, Optional, List
 import logging
+import math
 import time
 import requests
 from requests.adapters import HTTPAdapter
@@ -11,6 +12,14 @@ from urllib3.util.retry import Retry
 logger = logging.getLogger("astf.price")
 
 SYMBOLS = {"btc": "BTCUSDT", "eth": "ETHUSDT"}
+
+
+def _positive_finite(value) -> Optional[float]:
+    try:
+        number = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return number if math.isfinite(number) and number > 0.0 else None
 
 
 class PriceFeed:
@@ -44,10 +53,7 @@ class PriceFeed:
             )
             r.raise_for_status()
             data = r.json()
-            p = float(data["price"])
-            if p <= 0:
-                return None
-            return p
+            return _positive_finite(data["price"])
         except Exception as e:
             logger.debug("Binance price failed for %s: %s", symbol, e)
             return None
@@ -66,7 +72,9 @@ class PriceFeed:
             out = []
             for c in data:
                 try:
-                    out.append(float(c[4]))
+                    close = _positive_finite(c[4])
+                    if close is not None:
+                        out.append(close)
                 except (TypeError, ValueError, IndexError):
                     continue
             return out
@@ -75,10 +83,17 @@ class PriceFeed:
             return []
 
     def _fresh_cache(self, now):
-        return {
-            asset: price for asset, price in self.cache.items()
-            if 0 <= now - self.cache_updated_at.get(asset, 0.0) <= self.max_stale_seconds
-        }
+        fresh = {}
+        for asset, raw_price in self.cache.items():
+            price = _positive_finite(raw_price)
+            try:
+                updated = float(self.cache_updated_at.get(asset, 0.0))
+            except (TypeError, ValueError, OverflowError):
+                continue
+            if (price is not None and math.isfinite(updated)
+                    and 0 <= now - updated <= self.max_stale_seconds):
+                fresh[asset] = price
+        return fresh
 
     def get_prices(self) -> Dict[str, float]:
         now = time.time()
@@ -91,7 +106,7 @@ class PriceFeed:
 
         successes = 0
         for asset, symbol in SYMBOLS.items():
-            p = self._fetch_binance_price(symbol)
+            p = _positive_finite(self._fetch_binance_price(symbol))
             if p is not None:
                 self.cache[asset] = p
                 self.cache_updated_at[asset] = now
@@ -116,10 +131,15 @@ class PriceFeed:
     def get_fresh_price(self, asset: str, max_age: float = None) -> Optional[float]:
         now = time.time()
         limit = self.max_stale_seconds if max_age is None else max(0.0, float(max_age))
-        updated = self.cache_updated_at.get(asset, 0.0)
-        if not updated or now - updated < 0 or now - updated > limit:
+        try:
+            updated = float(self.cache_updated_at.get(asset, 0.0))
+        except (TypeError, ValueError, OverflowError):
             return None
-        return self.cache.get(asset)
+        price = _positive_finite(self.cache.get(asset))
+        if (price is None or not math.isfinite(updated) or updated <= 0
+                or now - updated < 0 or now - updated > limit):
+            return None
+        return price
 
     def health(self) -> dict:
         """Small diagnostic snapshot; age is reported, never used to refresh data."""
@@ -138,9 +158,14 @@ class PriceFeed:
 
     @staticmethod
     def _ret(prices: List[float], bars: int) -> float:
-        if len(prices) <= bars or prices[-1 - bars] <= 0:
+        if len(prices) <= bars:
             return 0.0
-        return (prices[-1] - prices[-1 - bars]) / prices[-1 - bars]
+        current = _positive_finite(prices[-1])
+        baseline = _positive_finite(prices[-1 - bars])
+        if current is None or baseline is None:
+            return 0.0
+        result = (current - baseline) / baseline
+        return result if math.isfinite(result) else 0.0
 
     def multi_timeframe_momentum(self, asset: str) -> Dict[str, float]:
         now = time.time()
@@ -176,8 +201,8 @@ class PriceFeed:
         combined = mtf["combined"]
         if lookback_prices and len(lookback_prices) >= 3:
             try:
-                a, b = float(lookback_prices[0]), float(lookback_prices[-1])
-                if a > 0 and b > 0:
+                a, b = _positive_finite(lookback_prices[0]), _positive_finite(lookback_prices[-1])
+                if a is not None and b is not None:
                     local_ret = (b - a) / a
                     local = max(-1.0, min(1.0, local_ret * 80))
                     combined = 0.7 * combined + 0.3 * local

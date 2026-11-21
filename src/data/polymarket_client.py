@@ -35,18 +35,26 @@ SLUG_TEMPLATES = [
 
 def _safe_float(x: Any, default: float = 0.0) -> float:
     try:
-        return float(x)
-    except (TypeError, ValueError):
+        value = float(x)
+        return value if math.isfinite(value) else default
+    except (TypeError, ValueError, OverflowError):
         return default
 
 
 def _parse_book_levels(levels: list) -> list:
+    """Keep only finite, positive-size binary-token quotes."""
     out = []
     for lvl in levels or []:
         if isinstance(lvl, dict):
-            out.append({"price": _safe_float(lvl.get("price")), "size": _safe_float(lvl.get("size"))})
+            price = _safe_float(lvl.get("price"), float("nan"))
+            size = _safe_float(lvl.get("size"), float("nan"))
         elif isinstance(lvl, (list, tuple)) and len(lvl) >= 2:
-            out.append({"price": _safe_float(lvl[0]), "size": _safe_float(lvl[1])})
+            price = _safe_float(lvl[0], float("nan"))
+            size = _safe_float(lvl[1], float("nan"))
+        else:
+            continue
+        if math.isfinite(price) and math.isfinite(size) and 0.0 < price < 1.0 and size > 0.0:
+            out.append({"price": price, "size": size})
     return out
 
 
@@ -322,7 +330,7 @@ class PolymarketData:
             bids = sorted(bids, key=lambda x: x["price"], reverse=True)
             asks = sorted(asks, key=lambda x: x["price"])
             mid = None
-            if bids and asks:
+            if bids and asks and bids[0]["price"] < asks[0]["price"]:
                 mid = (bids[0]["price"] + asks[0]["price"]) / 2
             return {
                 "bids": bids,
