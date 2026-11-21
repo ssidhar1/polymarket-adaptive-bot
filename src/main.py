@@ -158,6 +158,17 @@ def _prune_cooldowns(cooldown_until: dict, now: float):
         del cooldown_until[k]
 
 
+def _validated_entry_quote(features: dict):
+    """Return an executable ask only when it came from a validated two-sided book."""
+    if not isinstance(features, dict) or not features.get("book_valid"):
+        return None
+    try:
+        ask = float(features.get("ask_price"))
+    except (TypeError, ValueError, OverflowError):
+        return None
+    return ask if math.isfinite(ask) and 0.0 < ask < 1.0 else None
+
+
 def _can_open_for_market(
     risk, tracker, size: float, open_count: int, asset: str, window: str,
     fee_rate: float = 0.0,
@@ -460,7 +471,8 @@ def run_paper(config: dict):
                                             level_price, level_size = float(level.get("price") or 0), float(level.get("size") or 0)
                                         else:
                                             level_price, level_size = float(level[0]), float(level[1])
-                                        if 0 < level_price < 1 and level_size > 0:
+                                        if (math.isfinite(level_price) and math.isfinite(level_size)
+                                                and 0 < level_price < 1 and level_size > 0):
                                             parsed_bids.append((level_price, level_size))
                                     except (TypeError, ValueError, IndexError):
                                         continue
@@ -677,17 +689,15 @@ def run_paper(config: dict):
                         sig_dn = ensemble.directional_score(feat_dn, preferred_side="down")
 
                         candidates = []
-                        for sig, feat, token, entry_px in [
-                            (sig_up, feat_up, up_token, up_ask),
-                            (sig_dn, feat_dn, down_token, down_ask),
+                        for sig, feat, token in [
+                            (sig_up, feat_up, up_token),
+                            (sig_dn, feat_dn, down_token),
                         ]:
-                            if entry_px is None:
-                                continue
-                            try:
-                                entry_f = float(entry_px)
-                            except (TypeError, ValueError):
-                                continue
-                            if entry_f <= 0 or entry_f >= 1:
+                            # Do not execute from the raw book quote. The
+                            # feature builder must first validate a finite,
+                            # two-sided, uncrossed book and derive its ask.
+                            entry_f = _validated_entry_quote(feat)
+                            if entry_f is None:
                                 continue
                             if not sig.get("pass") and not (
                                 regime == "favorable"
