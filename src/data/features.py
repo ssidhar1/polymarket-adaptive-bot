@@ -3,6 +3,7 @@ Feature engineering for short-term crypto Up/Down markets.
 """
 from typing import Dict, Optional, Any
 import logging
+import math
 from datetime import datetime, timezone
 
 from src.utils.fees import parse_fee_schedule, parse_fee_exponent
@@ -13,23 +14,36 @@ logger = logging.getLogger("astf.features")
 def _level_price(level: Any) -> float:
     try:
         if isinstance(level, dict):
-            return float(level.get("price", 0) or 0)
-        if isinstance(level, (list, tuple)) and len(level) >= 1:
-            return float(level[0])
-    except (TypeError, ValueError):
-        pass
-    return 0.0
+            value = float(level.get("price", 0) or 0)
+        elif isinstance(level, (list, tuple)) and len(level) >= 1:
+            value = float(level[0])
+        else:
+            return 0.0
+        return value if math.isfinite(value) and 0.0 < value < 1.0 else 0.0
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
 
 
 def _level_size(level: Any) -> float:
     try:
         if isinstance(level, dict):
-            return float(level.get("size", 0) or 0)
-        if isinstance(level, (list, tuple)) and len(level) >= 2:
-            return float(level[1])
-    except (TypeError, ValueError):
-        pass
-    return 0.0
+            value = float(level.get("size", 0) or 0)
+        elif isinstance(level, (list, tuple)) and len(level) >= 2:
+            value = float(level[1])
+        else:
+            return 0.0
+        return value if math.isfinite(value) and value > 0.0 else 0.0
+    except (TypeError, ValueError, OverflowError):
+        return 0.0
+
+
+def _valid_levels(levels: list) -> list:
+    valid = []
+    for level in levels or []:
+        price, size = _level_price(level), _level_size(level)
+        if price > 0.0 and size > 0.0:
+            valid.append({"price": price, "size": size})
+    return valid
 
 
 def detect_window_seconds(slug: Optional[str], question: Optional[str] = None) -> int:
@@ -78,19 +92,21 @@ def compute_depth_usd(bids: list, asks: list, levels: int = 5) -> float:
 def best_ask(book: Dict) -> Optional[float]:
     """Return an actually quoted ask; a midpoint is not executable liquidity."""
     asks = book.get("asks") or []
-    if not asks:
-        return None
-    price = _level_price(asks[0])
-    return price if 0 < price < 1 else None
+    for level in asks:
+        price = _level_price(level)
+        if price > 0.0 and _level_size(level) > 0.0:
+            return price
+    return None
 
 
 def best_bid(book: Dict) -> Optional[float]:
     """Return an actually quoted bid; a midpoint is not executable liquidity."""
     bids = book.get("bids") or []
-    if not bids:
-        return None
-    price = _level_price(bids[0])
-    return price if 0 < price < 1 else None
+    for level in bids:
+        price = _level_price(level)
+        if price > 0.0 and _level_size(level) > 0.0:
+            return price
+    return None
 
 
 def cross_book_imbalance(book_up: Dict, book_down: Dict) -> float:
@@ -100,7 +116,8 @@ def cross_book_imbalance(book_up: Dict, book_down: Dict) -> float:
     if up_mid is not None and dn_mid is not None:
         try:
             u, d = float(up_mid), float(dn_mid)
-            skew = max(-1.0, min(1.0, (u - d) * 2.0))
+            if math.isfinite(u) and math.isfinite(d) and 0.0 < u < 1.0 and 0.0 < d < 1.0:
+                skew = max(-1.0, min(1.0, (u - d) * 2.0))
         except (TypeError, ValueError):
             skew = 0.0
 
@@ -118,15 +135,30 @@ def build_features(
     book_other: Optional[Dict] = None,
     vs_open: float = 0.0,
 ) -> Dict:
-    bids = book.get("bids", []) or []
-    asks = book.get("asks", []) or []
+    book = book if isinstance(book, dict) else {}
+    raw_bids = book.get("bids", []) or []
+    raw_asks = book.get("asks", []) or []
+    bids = _valid_levels(raw_bids)
+    asks = _valid_levels(raw_asks)
+    invalid_level_count = len(raw_bids) + len(raw_asks) - len(bids) - len(asks)
 
-    mid = book.get("mid")
-    if mid is None and bids and asks:
-        mid = (_level_price(bids[0]) + _level_price(asks[0])) / 2
-
-    ask = best_ask(book)
-    bid = best_bid(book)
+    bid = bids[0]["price"] if bids else None
+    ask = asks[0]["price"] if asks else None
+    two_sided = bid is not None and ask is not None and bid < ask
+    if not two_sided:
+        # A one-sided, locked, or crossed book is not a trustworthy basis
+        # for an executable quote or midpoint. Do not leak stale mid values
+        # into downstream signal scoring.
+        bid = None
+        ask = None
+        mid = None
+    else:
+        raw_mid = book.get("mid")
+        try:
+            candidate_mid = float(raw_mid)
+        except (TypeError, ValueError, OverflowError):
+            candidate_mid = float("nan")
+        mid = candidate_mid if math.isfinite(candidate_mid) and 0.0 < candidate_mid < 1.0 else (bid + ask) / 2.0
 
     slug = market.get("slug") or market.get("market_slug") or ""
     question = market.get("question") or ""
@@ -147,7 +179,7 @@ def build_features(
     # Microprice weights each quote by liquidity resting on the opposite side.
     microprice = mid
     microprice_delta = 0.0
-    if bids and asks and mid is not None:
+    if two_sided and mid is not None:
         bid_px, ask_px = _level_price(bids[0]), _level_price(asks[0])
         bid_sz, ask_sz = _level_size(bids[0]), _level_size(asks[0])
         total_sz = bid_sz + ask_sz
@@ -156,10 +188,12 @@ def build_features(
             microprice_delta = max(-1.0, min(1.0, (microprice - mid) * 20.0))
 
     spread = 0.0
-    if bids and asks:
-        spread = max(0.0, _level_price(asks[0]) - _level_price(bids[0]))
+    if two_sided:
+        spread = ask - bid
 
-    if spread > 0.04:
+    if not two_sided:
+        vol_regime = "unknown"
+    elif spread > 0.04:
         vol_regime = "high"
     elif spread < 0.015:
         vol_regime = "low"
@@ -169,6 +203,8 @@ def build_features(
     fee_rate = parse_fee_schedule(market, default_rate=0.07)
 
     return {
+        "book_valid": bool(two_sided),
+        "book_invalid_level_count": invalid_level_count,
         "momentum": external_momentum,
         "vs_open": float(vs_open or 0.0),
         "book_imbalance": imbalance,
