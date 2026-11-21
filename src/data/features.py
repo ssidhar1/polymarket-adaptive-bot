@@ -138,8 +138,8 @@ def build_features(
     book = book if isinstance(book, dict) else {}
     raw_bids = book.get("bids", []) or []
     raw_asks = book.get("asks", []) or []
-    bids = _valid_levels(raw_bids)
-    asks = _valid_levels(raw_asks)
+    bids = sorted(_valid_levels(raw_bids), key=lambda level: level["price"], reverse=True)
+    asks = sorted(_valid_levels(raw_asks), key=lambda level: level["price"])
     invalid_level_count = len(raw_bids) + len(raw_asks) - len(bids) - len(asks)
 
     bid = bids[0]["price"] if bids else None
@@ -153,12 +153,9 @@ def build_features(
         ask = None
         mid = None
     else:
-        raw_mid = book.get("mid")
-        try:
-            candidate_mid = float(raw_mid)
-        except (TypeError, ValueError, OverflowError):
-            candidate_mid = float("nan")
-        mid = candidate_mid if math.isfinite(candidate_mid) and 0.0 < candidate_mid < 1.0 else (bid + ask) / 2.0
+        # Derive mid from the same validated best bid/ask pair; never trust a
+        # stale or malformed cached midpoint over the executable quotes.
+        mid = (bid + ask) / 2.0
 
     slug = market.get("slug") or market.get("market_slug") or ""
     question = market.get("question") or ""
