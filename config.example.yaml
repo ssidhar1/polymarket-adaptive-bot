@@ -1,14 +1,14 @@
 bankroll: 1000.0
 
 risk:
-  max_position_pct: 0.04
+  max_position_pct: 0.045
   max_concurrent: 6
-  max_total_exposure_pct: 0.20
-  max_asset_exposure_pct: 0.14
+  max_total_exposure_pct: 0.22
+  max_asset_exposure_pct: 0.15
   max_window_exposure_pct: 0.18
-  daily_loss_limit_pct: 0.05
-  max_drawdown_pct: 0.12
-  min_edge_after_fees: 0.015
+  daily_loss_limit_pct: 0.06
+  max_drawdown_pct: 0.14
+  min_edge_after_fees: 0.012
   probability_model_calibrated: false
 
 markets:
@@ -20,65 +20,61 @@ markets:
     - "15m"
 
 signals:
-  min_score: 0.52
+  min_score: 0.50
   degen_mode: true
   fee_rate: 0.07
-  max_entry_price: 0.56
-  min_abs_momentum: 0.09
-  lookback_minutes: 25
-  min_depth_usd: 12.0
-  min_time_remaining_pct: 0.06
+  max_entry_price: 0.58
+  min_abs_momentum: 0.08
+  lookback_minutes: 20
+  min_depth_usd: 10.0
+  min_time_remaining_pct: 0.05
   max_time_remaining_pct: 0.99
-  max_prob_lift: 0.04
-  # Diagnostic heuristic lifts are not calibrated fair values.
-  # Keep false until a calibrated, event-time model is connected.
+  max_prob_lift: 0.06
+  near_resolution_boost: true
+  # Keep false until calibrated model has sufficient samples
   allow_heuristic_paper_entries: false
 
 learning:
-  calibration_window: 100
-  regime_lookback: 30
-  exploration_pct: 0.02
+  calibration_window: 80
+  regime_lookback: 25
+  exploration_pct: 0.015
 
 execution:
-  prefer_maker: false
-  paper_slippage_bps: 20
+  prefer_maker: true
+  paper_slippage_bps: 15
   max_book_age_seconds: 8
-  max_slippage_bps: 30
-  cycle_seconds: 7
-  cooldown_seconds: 35
-  max_markets_per_cycle: 16
-  stale_grace_seconds: 260
-  stale_max_hold_minutes: 30
+  max_slippage_bps: 35
+  cycle_seconds: 6
+  cooldown_seconds: 30
+  max_markets_per_cycle: 18
+  stale_grace_seconds: 240
+  stale_max_hold_minutes: 28
+  execute_complete_set: true
 
-# Unified strategy sleeves. These settings are research defaults only;
-# the allocator is not wired into the live strategy loop yet.
 strategy_portfolio:
   enabled: false
   starting_bankroll: 1000.0
-  reserve_cash_pct: 0.20
-  max_strategy_pct: 0.25
-  max_position_pct: 0.04
+  reserve_cash_pct: 0.18
+  max_strategy_pct: 0.28
+  max_position_pct: 0.045
   compound_only_settled_net_pnl: true
   weights:
-    astf_intraday: 0.35
-    weekly_price_ranges: 0.25
-    near_resolution: 0.15
-    weather_station: 0.10
-    cross_market_arb: 0.10
-    information_latency: 0.05
+    astf_intraday: 0.40
+    near_resolution: 0.25
+    complete_set: 0.15
+    weekly_price_ranges: 0.10
+    weather_station: 0.05
+    cross_market_arb: 0.05
 
-# Paper-only automatic exits. This never submits exchange orders.
 exit_policy:
   enabled: true
-  take_profit_pct: 0.20
-  stop_loss_pct: 0.15
-  max_hold_seconds: 180
+  take_profit_pct: 0.18
+  stop_loss_pct: 0.12
+  max_hold_seconds: 150
   max_book_age_seconds: 3
-  fill_fraction: 0.50
-  slippage_bps: 20
+  fill_fraction: 0.60
+  slippage_bps: 15
 
-# Dormant live adapter. The strategy loop remains paper-only; do not enable
-# these settings until live lifecycle integration has a separate review.
 live_execution:
   enabled: false
   max_order_notional_usd: 10.0
