@@ -1,5 +1,6 @@
 """
 External price feed with multi-timeframe momentum and bounded outage backoff.
+Falls back to Coinbase and Kraken when Binance is unavailable.
 """
 from typing import Dict, Optional, List
 import logging
@@ -58,6 +59,43 @@ class PriceFeed:
             logger.debug("Binance price failed for %s: %s", symbol, e)
             return None
 
+    def _fetch_coinbase_price(self, asset: str) -> Optional[float]:
+        pair = {"btc": "BTC-USD", "eth": "ETH-USD"}.get(asset)
+        if not pair:
+            return None
+        try:
+            r = self.session.get(
+                f"https://api.coinbase.com/v2/prices/{pair}/spot",
+                timeout=4,
+            )
+            r.raise_for_status()
+            data = r.json()
+            return _positive_finite(data.get("data", {}).get("amount"))
+        except Exception as e:
+            logger.debug("Coinbase price failed for %s: %s", asset, e)
+            return None
+
+    def _fetch_kraken_price(self, asset: str) -> Optional[float]:
+        pair = {"btc": "XBTUSD", "eth": "ETHUSD"}.get(asset)
+        if not pair:
+            return None
+        try:
+            r = self.session.get(
+                "https://api.kraken.com/0/public/Ticker",
+                params={"pair": pair},
+                timeout=4,
+            )
+            r.raise_for_status()
+            data = r.json()
+            result = data.get("result", {})
+            key = next(iter(result), None)
+            if key and result[key].get("c"):
+                return _positive_finite(result[key]["c"][0])
+            return None
+        except Exception as e:
+            logger.debug("Kraken price failed for %s: %s", asset, e)
+            return None
+
     def _fetch_klines(self, symbol: str, interval: str = "1m", limit: int = 20) -> List[float]:
         try:
             r = self.session.get(
@@ -99,14 +137,16 @@ class PriceFeed:
         now = time.time()
         if now - self.last_fetch < self.cache_ttl and self.cache:
             return self._fresh_cache(now)
-        # Back off after a failed/partial poll. A stale cache is never promoted
-        # to fresh; the strategy's get_fresh_price gate remains authoritative.
         if now < self._next_retry_at:
             return self._fresh_cache(now)
 
         successes = 0
         for asset, symbol in SYMBOLS.items():
             p = _positive_finite(self._fetch_binance_price(symbol))
+            if p is None:
+                p = self._fetch_coinbase_price(asset)
+            if p is None:
+                p = self._fetch_kraken_price(asset)
             if p is not None:
                 self.cache[asset] = p
                 self.cache_updated_at[asset] = now
@@ -122,7 +162,7 @@ class PriceFeed:
             self._next_retry_at = now + delay
             if self._fail_count in (1, 3, 5) or self._fail_count % 10 == 0:
                 logger.warning(
-                    "Binance price feed partial/unavailable (failures=%d, successes=%d/%d); "
+                    "Price feed partial/unavailable (failures=%d, successes=%d/%d); "
                     "retry in %.0fs; only cache <=%.0fs old is exposed",
                     self._fail_count, successes, len(SYMBOLS), delay, self.max_stale_seconds,
                 )
@@ -142,7 +182,6 @@ class PriceFeed:
         return price
 
     def health(self) -> dict:
-        """Small diagnostic snapshot; age is reported, never used to refresh data."""
         now = time.time()
         return {
             "failures": self._fail_count,
@@ -181,7 +220,6 @@ class PriceFeed:
 
         closes = self._fetch_klines(symbol, interval="1m", limit=20)
         if len(closes) < 5:
-            # Never reuse stale momentum when the upstream candle feed fails.
             self._mtf_cache[asset] = (now, zero)
             return zero
 
