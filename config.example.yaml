@@ -31,8 +31,9 @@ signals:
   max_time_remaining_pct: 0.99
   max_prob_lift: 0.06
   near_resolution_boost: true
-  # Keep false until calibrated model has sufficient samples
-  allow_heuristic_paper_entries: false
+  # Temporary bootstrap: allow heuristic probes so calibrator can build samples.
+  # Flip back to false once ~30 resolves exist and calibrated path is live.
+  allow_heuristic_paper_entries: true
 
 learning:
   calibration_window: 80
