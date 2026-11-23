@@ -237,13 +237,15 @@ class PriceFeed:
     def momentum(self, asset: str, lookback_prices: list = None) -> float:
         mtf = self.multi_timeframe_momentum(asset)
         combined = mtf["combined"]
+        # When klines fail (combined ~0), lean harder on local price history
+        weight_local = 0.85 if abs(combined) < 0.02 else 0.30
         if lookback_prices and len(lookback_prices) >= 3:
             try:
                 a, b = _positive_finite(lookback_prices[0]), _positive_finite(lookback_prices[-1])
                 if a is not None and b is not None:
                     local_ret = (b - a) / a
                     local = max(-1.0, min(1.0, local_ret * 80))
-                    combined = 0.7 * combined + 0.3 * local
+                    combined = (1.0 - weight_local) * combined + weight_local * local
             except (TypeError, ValueError):
                 pass
         return float(max(-1.0, min(1.0, combined)))
