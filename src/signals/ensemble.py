@@ -141,7 +141,8 @@ class EnsembleSignal:
         total_drive = directional_drive + lag_boost * 0.65 + lead_boost * 0.55 + micro_boost
 
         # 5m windows have been more profitable; require stronger drive on 15m
-        drive_floor = self.min_abs_momentum * (0.40 if window_s >= 800 else 0.22)
+        # Paper degen: lower floor so 5m can generate samples while Chainlink settles
+        drive_floor = self.min_abs_momentum * (0.28 if window_s >= 800 else 0.14)
         if total_drive < drive_floor:
             return self._reject("against_mom")
 
