@@ -621,12 +621,12 @@ def run_paper(config: dict):
                         hist = list(price_history.get(asset, []))
                         mtf = prices.multi_timeframe_momentum(asset)
                         mom = prices.momentum(asset, hist)
-                        # Short-window lag: sharp spot move while book is still near 0.5
+                        # Short-window lag: sharp spot move while book mid is still near 0.5
                         if len(hist) >= 4 and hist[-4] > 0 and hist[-1] > 0:
                             move = (hist[-1] - hist[-4]) / hist[-4]
                             if abs(move) > 0.0008:
-                                up_mid = float(feat_up.get("mid") or 0.5)
-                                if 0.42 < up_mid < 0.58:
+                                mid_now = float(up_mid or 0.5)
+                                if 0.42 < mid_now < 0.58:
                                     lag = 0.15 if move > 0 else -0.15
                                     mom = max(-1.0, min(1.0, mom + lag))
 

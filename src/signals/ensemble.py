@@ -107,11 +107,11 @@ class EnsembleSignal:
             return self._reject("near_expiry")
         if entry < 0.02 or entry > 0.98:
             return self._reject("extreme_mid")
-        # Cheap-side preference: reject expensive entries unless edge is large
-        if entry > 0.48 and entry > self.max_entry * 0.85:
-            return self._reject("expensive_entry")
+        # Cheap-side preference: hard reject above max_entry; soft preference below 0.48
+        # (large-edge override happens after heuristic_edge is computed)
         if entry > self.max_entry:
             return self._reject("expensive_entry")
+        cheap_side_preferred = entry <= 0.48
 
         if preferred_side in ("up", "down"):
             direction = preferred_side
@@ -213,6 +213,9 @@ class EnsembleSignal:
         min_edge = self.min_edge if not self.degen else max(0.007, self.min_edge * 0.55)
         if heuristic_edge < min_edge:
             return self._reject("heuristic_edge_below_costs")
+        # Cheap-side: entries above 0.48 need a larger edge to proceed
+        if entry > 0.48 and heuristic_edge < max(min_edge * 1.8, 0.025):
+            return self._reject("expensive_entry")
 
         signal_pass = (
             score >= self.min_score
