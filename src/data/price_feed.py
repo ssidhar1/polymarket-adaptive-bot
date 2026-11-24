@@ -12,6 +12,19 @@ from urllib3.util.retry import Retry
 
 logger = logging.getLogger("astf.price")
 
+
+# Chainlink AggregatorV3 on Ethereum mainnet (latestRoundData selector)
+CHAINLINK_FEEDS = {
+    "btc": "0xF4030086522a5bEEa4988F8cA5B36dbC97BeE88c",
+    "eth": "0x5f4eC3Df9cbd43714FE2740f5E3616155c5b8419",
+}
+CHAINLINK_RPCS = [
+    "https://eth.llamarpc.com",
+    "https://ethereum.publicnode.com",
+    "https://rpc.ankr.com/eth",
+]
+CHAINLINK_SELECTOR = "0xfeaf968c"  # latestRoundData()
+
 SYMBOLS = {"btc": "BTCUSDT", "eth": "ETHUSDT"}
 
 
@@ -47,6 +60,38 @@ class PriceFeed:
         # Rolling prices for 60s average (Chainlink-style settlement proxy)
         self._price_ring: Dict[str, list] = {"btc": [], "eth": []}
         self._ring_max = 12  # ~60s at 5s polls
+
+
+    def _fetch_chainlink_price(self, asset: str) -> Optional[float]:
+        """Read latest Chainlink AggregatorV3 price via public Ethereum RPC eth_call."""
+        addr = CHAINLINK_FEEDS.get(asset)
+        if not addr:
+            return None
+        payload = {
+            "jsonrpc": "2.0",
+            "id": 1,
+            "method": "eth_call",
+            "params": [{"to": addr, "data": CHAINLINK_SELECTOR}, "latest"],
+        }
+        for rpc in CHAINLINK_RPCS:
+            try:
+                r = self.session.post(rpc, json=payload, timeout=5)
+                r.raise_for_status()
+                result = r.json().get("result")
+                if not result or not isinstance(result, str) or len(result) < 130:
+                    continue
+                # answer is the second 32-byte word (offset 66..130)
+                answer_hex = result[66:130]
+                answer = int(answer_hex, 16)
+                # signed int256
+                if answer >= 2**255:
+                    answer -= 2**256
+                price = answer / 1e8  # BTC/USD and ETH/USD use 8 decimals
+                return _positive_finite(price)
+            except Exception as e:
+                logger.debug("Chainlink %s via %s failed: %s", asset, rpc, e)
+                continue
+        return None
 
     def _fetch_binance_price(self, symbol: str) -> Optional[float]:
         try:
@@ -153,11 +198,20 @@ class PriceFeed:
 
         successes = 0
         for asset, symbol in SYMBOLS.items():
-            p = _positive_finite(self._fetch_binance_price(symbol))
+            p = self._fetch_chainlink_price(asset)
+            src = "chainlink" if p is not None else None
+            if p is None:
+                p = _positive_finite(self._fetch_binance_price(symbol))
+                src = "binance" if p is not None else None
             if p is None:
                 p = self._fetch_coinbase_price(asset)
+                src = "coinbase" if p is not None else None
             if p is None:
                 p = self._fetch_kraken_price(asset)
+                src = "kraken" if p is not None else None
+            if p is not None and src:
+                self._last_source = getattr(self, "_last_source", {})
+                self._last_source[asset] = src
             if p is not None:
                 self.cache[asset] = p
                 self.cache_updated_at[asset] = now

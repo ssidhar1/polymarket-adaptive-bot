@@ -24,7 +24,8 @@ signals:
   min_score: 0.50
   degen_mode: true
   fee_rate: 0.07
-  max_entry_price: 0.58
+  chainlink_enabled: true
+  max_entry_price: 0.62
   min_abs_momentum: 0.08
   lookback_minutes: 20
   min_depth_usd: 10.0

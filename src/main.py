@@ -345,7 +345,7 @@ def run_paper(config: dict):
     prefer_maker = bool(config.get("execution", {}).get("prefer_maker", True))
     paper_slippage = float(config.get("execution", {}).get("paper_slippage_bps", 20))
     executor = PaperExecutor(
-        fee_rate=fee_rate, prefer_maker=False, slippage_bps=paper_slippage,
+        fee_rate=fee_rate, prefer_maker=prefer_maker, slippage_bps=paper_slippage,
         max_slippage_bps=float(config.get("execution", {}).get("max_slippage_bps", 30)),
     )
     tracker = PositionTracker()
