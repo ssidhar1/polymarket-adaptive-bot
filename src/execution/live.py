@@ -1,5 +1,8 @@
 """Dormant, fail-closed Polymarket live order adapter.
 
+Targets international CLOB (clob.polymarket.com) via your own wallet.
+Not Polymarket US. Requires POLYMARKET_PRIVATE_KEY + POLYMARKET_WALLET (EOA).
+
 Not connected to ASTF's signal loop. Paper remains the only supported runtime
 until partial-fill reconciliation, exits, cancellation, and restart recovery
 are implemented and separately reviewed.
