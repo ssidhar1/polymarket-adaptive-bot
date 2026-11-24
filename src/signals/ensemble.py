@@ -107,6 +107,9 @@ class EnsembleSignal:
             return self._reject("near_expiry")
         if entry < 0.02 or entry > 0.98:
             return self._reject("extreme_mid")
+        # Cheap-side preference: reject expensive entries unless edge is large
+        if entry > 0.48 and entry > self.max_entry * 0.85:
+            return self._reject("expensive_entry")
         if entry > self.max_entry:
             return self._reject("expensive_entry")
 
@@ -142,8 +145,13 @@ class EnsembleSignal:
 
         # 5m windows have been more profitable; require stronger drive on 15m
         # Paper degen: lower floor so 5m can generate samples while Chainlink settles
+        # Opening-gap bias: early in window, prefer the side already ahead of the open
+        gap_boost = 0.0
+        if remaining_s > 180 and abs(vs_open) > 0.15:
+            if (direction == "up" and vs_open > 0) or (direction == "down" and vs_open < 0):
+                gap_boost = 0.12 * min(1.0, abs(vs_open))
         drive_floor = self.min_abs_momentum * (0.28 if window_s >= 800 else 0.14)
-        if total_drive < drive_floor:
+        if total_drive + gap_boost < drive_floor:
             return self._reject("against_mom")
 
         if abs(total_drive) < self.min_abs_momentum * 0.65 and abs(signed_imb) < 0.07:
@@ -168,6 +176,7 @@ class EnsembleSignal:
             + lag_boost
             + lead_boost
             + near_res
+            + gap_boost
         )
 
         if self.degen:

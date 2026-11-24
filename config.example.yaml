@@ -26,6 +26,7 @@ signals:
   fee_rate: 0.07
   chainlink_enabled: true
   max_entry_price: 0.62
+  cheap_side_max: 0.48  # prefer underdog entries
   min_abs_momentum: 0.08
   lookback_minutes: 20
   min_depth_usd: 10.0
