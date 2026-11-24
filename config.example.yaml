@@ -17,7 +17,8 @@ markets:
     - "eth"
   windows:
     - "5m"
-    - "15m"
+    # 15m has been a drag; keep disabled until complete-set + late-window prove out
+    # - "15m"
 
 signals:
   min_score: 0.50
@@ -51,6 +52,8 @@ execution:
   stale_grace_seconds: 240
   stale_max_hold_minutes: 28
   execute_complete_set: true
+  complete_set_max_pair: 0.97
+  complete_set_min_edge: 0.002
 
 strategy_portfolio:
   enabled: false

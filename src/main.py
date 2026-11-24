@@ -697,12 +697,14 @@ def run_paper(config: dict):
                         )
                         if arb_watch and config.get("execution", {}).get("execute_complete_set", False):
                             edge = float(arb_watch.get("edge") or 0)
-                            if edge > 0.003:
+                            min_edge = float(config.get("execution", {}).get("complete_set_min_edge", 0.002))
+                            max_pair = float(config.get("execution", {}).get("complete_set_max_pair", 0.97))
+                            if edge > min_edge:
                                 up_px = float(arb_watch["up_price"])
                                 dn_px = float(arb_watch["down_price"])
                                 pair = up_px + dn_px
-                                if 0.90 < pair < 0.998:
-                                    budget = min(float(risk.bankroll) * 0.025, 35.0)
+                                if 0.88 < pair < max_pair:
+                                    budget = min(float(risk.bankroll) * 0.035, 40.0)
                                     n = budget / pair if pair > 0 else 0
                                     su, sd = n * up_px, n * dn_px
                                     if su > 0.5 and sd > 0.5 and risk.can_open(su + sd, open_count=open_n):

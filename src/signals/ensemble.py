@@ -153,8 +153,9 @@ class EnsembleSignal:
 
         # Near-resolution sleeve boost
         near_res = 0.0
-        if self.near_res_boost and remaining_s <= 110 and total_drive > 0.18 and entry < 0.62:
-            near_res = 0.22 * total_drive * (1.5 if remaining_s < 70 else 1.1)
+        # Late-window "buy the winner" style boost once time is short and drive is clear
+        if self.near_res_boost and remaining_s <= 90 and total_drive > 0.15 and entry < 0.65:
+            near_res = 0.28 * total_drive * (1.6 if remaining_s < 50 else 1.2)
 
         raw = (
             0.35 * signed_mom
