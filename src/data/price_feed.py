@@ -44,6 +44,9 @@ class PriceFeed:
         self._mtf_ttl = 25.0
         self._fail_count = 0
         self._next_retry_at = 0.0
+        # Rolling prices for 60s average (Chainlink-style settlement proxy)
+        self._price_ring: Dict[str, list] = {"btc": [], "eth": []}
+        self._ring_max = 12  # ~60s at 5s polls
 
     def _fetch_binance_price(self, symbol: str) -> Optional[float]:
         try:
@@ -133,6 +136,14 @@ class PriceFeed:
                 fresh[asset] = price
         return fresh
 
+    def get_60s_avg(self, asset: str) -> Optional[float]:
+        """Return a simple 60s average from recent polls. Proxy for Chainlink settlement input."""
+        ring = self._price_ring.get(asset, [])
+        if len(ring) < 3:
+            return None
+        vals = [p for _, p in ring[-self._ring_max:]]
+        return sum(vals) / len(vals) if vals else None
+
     def get_prices(self) -> Dict[str, float]:
         now = time.time()
         if now - self.last_fetch < self.cache_ttl and self.cache:
@@ -151,6 +162,10 @@ class PriceFeed:
                 self.cache[asset] = p
                 self.cache_updated_at[asset] = now
                 successes += 1
+                ring = self._price_ring.setdefault(asset, [])
+                ring.append((now, p))
+                if len(ring) > self._ring_max:
+                    ring.pop(0)
 
         self.last_fetch = now
         if successes == len(SYMBOLS):

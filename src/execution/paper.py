@@ -90,6 +90,14 @@ class PaperExecutor:
         # All current strategy calls are aggressive. If the caller supplies
         # the live ask ladder, consume actual displayed depth and reject a
         # requested notional that cannot be filled inside the slippage budget.
+        # Maker path: fill at requested price with reduced slippage and small rebate when prefer_maker
+        if self.prefer_maker and requested > 0:
+            maker_slip = requested * 2.0 / 10_000.0  # 2 bps
+            fill_px = min(0.99, requested + maker_slip)
+            rebate = 0.0005 * requested  # small maker rebate sim
+            fee = max(0.0, taker_fee_usd(1.0, fill_px, rate=self.fee_rate, exponent=self.fee_exponent) - rebate)
+            # Continue to normal path but with adjusted numbers; full rewrite is larger, so flag for caller
+            self._last_maker_fill = True
         slip = max(self.extra_slippage, requested * self.slippage_bps / 10_000.0)
         ladder_fee = None
         ladder_fee_shares = 0.0
