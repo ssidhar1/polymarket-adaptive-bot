@@ -81,8 +81,11 @@ class PriceFeed:
                 if not result or not isinstance(result, str) or len(result) < 130:
                     continue
                 # answer is the second 32-byte word (offset 66..130)
-                answer_hex = result[66:130]
-                answer = int(answer_hex, 16)
+                try:
+                    answer_hex = result[66:130]
+                    answer = int(answer_hex, 16)
+                except (ValueError, IndexError):
+                    continue
                 # signed int256
                 if answer >= 2**255:
                     answer -= 2**256

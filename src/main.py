@@ -704,8 +704,13 @@ def run_paper(config: dict):
                             min_edge = float(config.get("execution", {}).get("complete_set_min_edge", 0.002))
                             max_pair = float(config.get("execution", {}).get("complete_set_max_pair", 0.97))
                             if edge > min_edge:
-                                up_px = float(arb_watch["up_price"])
-                                dn_px = float(arb_watch["down_price"])
+                                try:
+                                    up_px = float(arb_watch["up_price"])
+                                    dn_px = float(arb_watch["down_price"])
+                                except (TypeError, ValueError, KeyError):
+                                    continue
+                                if not (0.01 < up_px < 0.99 and 0.01 < dn_px < 0.99):
+                                    continue
                                 pair = up_px + dn_px
                                 if 0.88 < pair < max_pair:
                                     # Scales with bankroll; soft cap at 5% so it compounds
