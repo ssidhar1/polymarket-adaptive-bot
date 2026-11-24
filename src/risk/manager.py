@@ -150,7 +150,11 @@ class RiskManager:
         confidence_scale = max(0.0, min(1.0, (confidence - 0.52) / 0.32))
         edge_scale = max(0.0, min(1.0, eaf / 0.05))
         regime_scale = 0.65 if regime == "chaotic" else (1.0 if regime == "normal" else 1.05)
-        return base * confidence_scale * edge_scale * regime_scale
+        # Scale with bankroll growth (parabolic but capped). Base $1000 = 1.0x, $10k ~ 1.4x, $50k ~ 1.8x
+        start = float(self.config.get("starting_bankroll", 1000.0) or 1000.0)
+        growth = max(1.0, self.bankroll / max(start, 1.0))
+        balance_scale = min(2.0, growth ** 0.25)  # soft compound boost, never more than 2x the pct
+        return base * confidence_scale * edge_scale * regime_scale * balance_scale
 
     def record_exploration(self, size: float):
         self.exploration_used_today += max(0.0, _finite(size, 0.0))

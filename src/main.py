@@ -708,7 +708,8 @@ def run_paper(config: dict):
                                 dn_px = float(arb_watch["down_price"])
                                 pair = up_px + dn_px
                                 if 0.88 < pair < max_pair:
-                                    budget = min(float(risk.bankroll) * 0.035, 40.0)
+                                    # Scales with bankroll; soft cap at 5% so it compounds
+                                    budget = min(float(risk.bankroll) * 0.04, float(risk.bankroll) * 0.05)
                                     n = budget / pair if pair > 0 else 0
                                     su, sd = n * up_px, n * dn_px
                                     if su > 0.5 and sd > 0.5 and risk.can_open(su + sd, open_count=open_n):
