@@ -83,8 +83,12 @@ exit_policy:
 
 live_execution:
   enabled: false
-  # International CLOB only (clob.polymarket.com). Use your own EOA wallet.
-  # Set POLYMARKET_PRIVATE_KEY + POLYMARKET_WALLET. Not Polymarket US.
+  # International CLOB only (clob.polymarket.com). Not Polymarket US.
+  # Env:
+  #   POLYMARKET_PRIVATE_KEY   - signing key (hex)
+  #   POLYMARKET_WALLET        - address of the signing key
+  #   POLYMARKET_SIGNATURE_TYPE - 0=EOA, 1=Magic, 2=proxy (default 0)
+  #   POLYMARKET_FUNDER        - proxy address that holds USDC (required for type 1/2)
   max_order_notional_usd: 10.0
   max_position_pct: 0.01
   max_total_exposure_pct: 0.05

@@ -61,20 +61,62 @@ class LiveExecutor:
 
     @classmethod
     def from_env(cls, config, journal_path, environ=None):
-        """Create SDK client only after gates pass; EOA only, no wallet deployment."""
+        """Create SDK client only after gates pass.
+
+        Supports plain EOA (signature_type 0) and Polymarket proxy/Magic
+        wallets (signature_type 1 or 2) via POLYMARKET_FUNDER.
+        International CLOB only (clob.polymarket.com). Not Polymarket US.
+        """
         env = os.environ if environ is None else environ
         cls._assert_armed((config or {}).get("live_execution", {}) or {}, env)
-        key, wallet = env.get("POLYMARKET_PRIVATE_KEY", ""), env.get("POLYMARKET_WALLET", "")
-        if not key or not wallet: raise LiveExecutionDisabled("POLYMARKET_PRIVATE_KEY and POLYMARKET_WALLET are required")
+        key = env.get("POLYMARKET_PRIVATE_KEY", "").strip()
+        wallet = env.get("POLYMARKET_WALLET", "").strip()
+        funder = env.get("POLYMARKET_FUNDER", "").strip()
+        sig_type_raw = env.get("POLYMARKET_SIGNATURE_TYPE", "0").strip()
+        if not key or not wallet:
+            raise LiveExecutionDisabled("POLYMARKET_PRIVATE_KEY and POLYMARKET_WALLET are required")
+        try:
+            sig_type = int(sig_type_raw)
+        except ValueError:
+            raise LiveExecutionError("POLYMARKET_SIGNATURE_TYPE must be 0, 1, or 2") from None
+        if sig_type not in (0, 1, 2):
+            raise LiveExecutionError("POLYMARKET_SIGNATURE_TYPE must be 0 (EOA), 1 (Magic), or 2 (proxy)")
         try:
             from eth_account import Account
-            from polymarket import SecureClient
             signer = Account.from_key(key).address
         except Exception as exc:
-            raise LiveExecutionError(f"Official Polymarket SDK initialization failed: {exc}") from exc
-        if signer.lower() != wallet.lower():
-            raise LiveExecutionDisabled("Only an EOA wallet matching the signing key is supported; smart/deposit wallets need separate review")
-        client = SecureClient.create(private_key=key, wallet=wallet)
+            raise LiveExecutionError(f"Could not derive signer from private key: {exc}") from exc
+        # For EOA the signing address must match the wallet.
+        # For proxy/Magic the funder holds the funds and the signer is the key.
+        if sig_type == 0:
+            if signer.lower() != wallet.lower():
+                raise LiveExecutionDisabled(
+                    "signature_type 0 requires POLYMARKET_WALLET to match the signing key address"
+                )
+            funder = funder or wallet
+        else:
+            if not funder:
+                raise LiveExecutionDisabled(
+                    "signature_type 1/2 requires POLYMARKET_FUNDER (the proxy address that holds USDC)"
+                )
+        try:
+            # Prefer official py-clob-client when available; fall back to local SecureClient.
+            try:
+                from py_clob_client.client import ClobClient
+                client = ClobClient(
+                    host="https://clob.polymarket.com",
+                    key=key,
+                    chain_id=137,
+                    signature_type=sig_type,
+                    funder=funder,
+                )
+            except ImportError:
+                from polymarket import SecureClient
+                client = SecureClient.create(
+                    private_key=key, wallet=wallet, signature_type=sig_type, funder=funder
+                )
+        except Exception as exc:
+            raise LiveExecutionError(f"Polymarket client initialization failed: {exc}") from exc
         return cls(client, config, journal_path, environ=env)
 
     @contextmanager
