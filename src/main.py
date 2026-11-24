@@ -641,6 +641,10 @@ def run_paper(config: dict):
                         vs_open = 0.0
                         if open_px and open_px > 0 and live_px > 0:
                             vs_open = max(-1.0, min(1.0, (live_px - open_px) / open_px * 150))
+                        # Settlement proxy: 60s average vs open
+                        avg60 = prices.get_60s_avg(asset)
+                        if avg60 and open_px and open_px > 0:
+                            vs_open = max(-1.0, min(1.0, (avg60 - open_px) / open_px * 150))
 
                         # Cross-asset lag
                         other_asset = "eth" if asset == "btc" else "btc"
