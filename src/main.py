@@ -566,7 +566,8 @@ def run_paper(config: dict):
                     logger.warning(f"Resolve error for {getattr(pos, 'order_id', '?')}: {e}")
 
             try:
-                markets = data.get_active_short_term_markets(assets=assets)
+                win_cfg = config.get("markets", {}).get("windows") or ["5m"]
+                markets = data.get_active_short_term_markets(assets=assets, windows=win_cfg)
             except Exception as e:
                 logger.warning(f"Market discovery failed: {e}")
                 markets = []

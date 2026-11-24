@@ -283,12 +283,14 @@ class PolymarketData:
             m["endDate"] = datetime.fromtimestamp(end_t, tz=timezone.utc).isoformat().replace("+00:00", "Z")
         return m
 
-    def get_active_short_term_markets(self, assets: List[str] = None, limit: int = 100) -> List[Dict]:
+    def get_active_short_term_markets(self, assets: List[str] = None, limit: int = 100, windows: List[str] = None) -> List[Dict]:
         if assets is None:
             assets = ["btc", "eth"]
+        allowed = {str(w).lower() for w in (windows or ["5m"])}
 
         now = time.time()
         candidates = self._candidate_slugs(assets, now)
+        candidates = [c for c in candidates if str(c[1]).lower() in allowed]
         results: List[Dict] = []
         seen = set()
 

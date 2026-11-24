@@ -156,6 +156,9 @@ class EnsembleSignal:
 
         if abs(total_drive) < self.min_abs_momentum * 0.65 and abs(signed_imb) < 0.07:
             return self._reject("weak_signal")
+        # Reject pure longshots with no real drive (mom and vs_open both flat)
+        if abs(signed_mom) < 0.04 and abs(signed_open) < 0.08 and entry < 0.25:
+            return self._reject("no_drive_longshot")
 
         time_term = 1.0 - abs(time_left - 0.25)
         cheap_term = max(0.0, (0.58 - entry) / 0.58)
