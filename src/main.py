@@ -763,7 +763,9 @@ def run_paper(config: dict):
                                         d = pos.direction or "up"
                                         held[d] = held.get(d, 0) + float(pos.size_usd or 0)
                                 remaining = float(feat_up.get("time_remaining_s") or 300)
-                                for side, tok, mid, feat in [("up", up_token, up_mid, feat_up), ("down", down_token, down_mid, feat_dn)]:
+                                up_mid_f = float(up_mid or 0.5)
+                                down_mid_f = float(down_mid or 0.5)
+                                for side, tok, mid, feat in [("up", up_token, up_mid_f, feat_up), ("down", down_token, down_mid_f, feat_dn)]:
                                     mom_s = float(feat.get("momentum") or 0)
                                     opp = "down" if side == "up" else "up"
                                     # Skip quoting a side that is strongly against the short-term move
