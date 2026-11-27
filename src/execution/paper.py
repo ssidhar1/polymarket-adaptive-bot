@@ -97,11 +97,18 @@ class PaperExecutor:
             "market_id": market_id,
             "side": "buy",
             "price": fill_px,
+            "fill_price": fill_px,
+            "effective_entry_price": fill_px,
             "size_usd": notional,
             "shares": shares,
+            "net_shares": shares,
             "fee": fee,
+            "residual_fee_usd": fee,
             "status": "filled",
             "maker": True,
+            "fee_rate": 0.0,
+            "fee_exponent": 1.0,
+            "fee_collection": "usdc",
             "ts": time.time(),
         }
         self.open_orders[order["order_id"]] = order
