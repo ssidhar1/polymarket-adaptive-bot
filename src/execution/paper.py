@@ -72,15 +72,17 @@ class PaperExecutor:
         mid = _finite(mid, 0.5)
         if not (0.02 < px < 0.98) or notional < MIN_NOTIONAL:
             return None
-        # Fill probability: higher when bid is closer to or above mid (aggressive maker)
-        # Cheap bids (<0.20) fill more often on panic; high bids (>0.80) fill on late exits
+        # Fill probability models adverse selection: closer/more aggressive bids fill more
+        # but the paper engine already charges no fee, so we keep fill rates modest
+        # to avoid overstating the edge. Cheap relative bids fill on flow; high bids fill late.
         dist = abs(mid - px)
-        if px < 0.22:
-            fill_prob = 0.18 if dist < 0.15 else 0.06
-        elif px > 0.78:
-            fill_prob = 0.12 if dist < 0.08 else 0.04
+        if px < mid - 0.02:
+            # passive relative
+            fill_prob = 0.09 if dist < 0.12 else 0.035
+        elif px > 0.80 and mid > 0.70:
+            fill_prob = 0.11 if dist < 0.10 else 0.04
         else:
-            fill_prob = 0.08 if dist < 0.06 else 0.02
+            fill_prob = 0.06 if dist < 0.08 else 0.02
         import random
         if random.random() > fill_prob:
             return None
