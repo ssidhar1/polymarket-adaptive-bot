@@ -8,6 +8,7 @@ the simulated fill would leave the binary-token price domain.
 from typing import Dict, Optional
 from datetime import datetime, timezone
 import logging
+import time
 import math
 import uuid
 
@@ -52,6 +53,58 @@ class PaperExecutor:
             raise ValueError("fee_collection must be 'usdc' or 'shares'")
         self.open_orders = {}
         self.closed_trades = []
+
+    def place_maker_bid(
+        self,
+        token_id: str,
+        price: float,
+        size_usd: float,
+        market_id: str,
+        mid: float,
+    ) -> Optional[Dict]:
+        """Resting maker bid. Zero taker fee. Fills only if mid is near or through the bid.
+        Models the pspspsps5-style cheap-side and late high-price resting fills.
+        """
+        if not token_id or not market_id:
+            return None
+        px = _finite(price, 0.0)
+        notional = _finite(size_usd, 0.0)
+        mid = _finite(mid, 0.5)
+        if not (0.02 < px < 0.98) or notional < MIN_NOTIONAL:
+            return None
+        # Fill probability: higher when bid is closer to or above mid (aggressive maker)
+        # Cheap bids (<0.20) fill more often on panic; high bids (>0.80) fill on late exits
+        dist = abs(mid - px)
+        if px < 0.22:
+            fill_prob = 0.18 if dist < 0.15 else 0.06
+        elif px > 0.78:
+            fill_prob = 0.12 if dist < 0.08 else 0.04
+        else:
+            fill_prob = 0.08 if dist < 0.06 else 0.02
+        import random
+        if random.random() > fill_prob:
+            return None
+        # Zero fee, tiny rebate
+        rebate = 0.0004 * px
+        fill_px = min(0.99, px + px * 0.0002)
+        fee = max(0.0, -rebate)  # net credit
+        shares = notional / fill_px
+        order = {
+            "order_id": f"mkr-{int(time.time()*1000)}-{token_id[-6:]}",
+            "token_id": token_id,
+            "market_id": market_id,
+            "side": "buy",
+            "price": fill_px,
+            "size_usd": notional,
+            "shares": shares,
+            "fee": fee,
+            "status": "filled",
+            "maker": True,
+            "ts": time.time(),
+        }
+        self.open_orders[order["order_id"]] = order
+        logger.info(f"MAKER FILL | BUY {shares:.1f} @ {fill_px:.3f} (bid={px:.3f} mid={mid:.3f}) | fee=${fee:.4f}")
+        return order
 
     def place_order(
         self,

@@ -743,6 +743,29 @@ def run_paper(config: dict):
                         if arb_watch:
                             logger.info(f"ARB WATCH | edge={arb_watch.get('edge',0):.3f} | {slug[:40]}")
 
+                        # Maker-only two-sided grid (primary path). Resting bids, hold to settle.
+                        # Models the profitable high-volume maker wallets: zero fee, occasional cheap or late fills.
+                        if config.get("execution", {}).get("maker_only", True):
+                            grid_levels = config.get("execution", {}).get("maker_grid", [0.08, 0.12, 0.18, 0.85, 0.92])
+                            clip = min(float(risk.bankroll) * 0.008, 4.0)
+                            if clip >= 0.8:
+                                for side, tok, mid in [("up", up_token, up_mid), ("down", down_token, down_mid)]:
+                                    for lvl in grid_levels:
+                                        if not (0.03 < lvl < 0.97):
+                                            continue
+                                        # Only quote if the level is not already way through the mid
+                                        if abs(mid - lvl) > 0.35:
+                                            continue
+                                        ord_ = executor.place_maker_bid(tok, lvl, clip, mid_id, mid)
+                                        if ord_:
+                                            meta = _timing_meta(m, feat_up, 0.5, 0.0, mom, regime, "maker")
+                                            tracker.add(ord_, direction=side, slug=slug, end_date=m.get("endDate") or m.get("end_date_iso"), meta=meta)
+                                            open_n += 1
+                                            trades_this_cycle += 1
+                                            logger.info(f"MAKER GRID {side.upper()} | bid={lvl:.2f} | mid={mid:.2f} | size=${clip:.1f} | {slug[:28]}")
+                            # Skip taker paths when maker_only is on
+                            continue
+
                         # Late-window winner: only when one side is already priced as the favorite
                         # and spot has confirmed the move. Skip pure directional otherwise.
                         remaining = float(feat_up.get("time_remaining_s") or 999)
