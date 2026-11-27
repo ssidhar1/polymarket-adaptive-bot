@@ -743,6 +743,28 @@ def run_paper(config: dict):
                         if arb_watch:
                             logger.info(f"ARB WATCH | edge={arb_watch.get('edge',0):.3f} | {slug[:40]}")
 
+                        # Late-window winner: only when one side is already priced as the favorite
+                        # and spot has confirmed the move. Skip pure directional otherwise.
+                        remaining = float(feat_up.get("time_remaining_s") or 999)
+                        if 15 < remaining < 100:
+                            for side, feat, tok, book in [("up", feat_up, up_token, book_up), ("down", feat_dn, down_token, book_down)]:
+                                lw = ensemble.late_winner(feat, side)
+                                if lw.get("pass"):
+                                    entry = float(lw.get("entry") or 0.7)
+                                    size = min(float(risk.bankroll) * 0.03, 12.0)
+                                    if size > 1.0 and risk.can_open(size, open_count=open_n):
+                                        meta = _timing_meta(m, feat, lw["score"], lw["edge"], mom, regime, "late")
+                                        ord_ = executor.place_order(tok, "buy", entry, size, mid_id, already_aggressive=True)
+                                        if ord_:
+                                            tracker.add(ord_, direction=side, slug=slug, end_date=m.get("endDate") or m.get("end_date_iso"), meta=meta)
+                                            open_n += 1
+                                            cooldown_until[mid_id] = now + cooldown_sec
+                                            trades_this_cycle += 1
+                                            logger.info(f"LATE WINNER {side.upper()} | score={lw['score']:.3f} | entry={entry:.3f} | t_left={remaining:.0f}s | {slug[:32]}")
+                                            break
+
+                        # Directional only as fallback; the 174-resolve sample showed negative expectancy.
+                        # Keep the call for logging but require a much higher bar.
                         cal_prob_up = calibrator.calibrate(0.52, datetime.now(timezone.utc).hour, float(feat_up.get("time_remaining_s") or 300), vs_open)
                         sig_up = ensemble.directional_score(feat_up, preferred_side="up", calibrated_prob=cal_prob_up)
                         cal_prob_dn = calibrator.calibrate(0.52, datetime.now(timezone.utc).hour, float(feat_dn.get("time_remaining_s") or 300), vs_open)

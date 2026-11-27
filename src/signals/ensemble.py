@@ -52,28 +52,57 @@ class EnsembleSignal:
 
     def complete_set_arb(self, up_mid, down_mid, up_ask=None, down_ask=None,
                          fee_rate=None, fee_exponent=1.0):
+        """Only true when both asks are cheap enough that the pair locks profit after fees."""
         if up_ask is None or down_ask is None:
             return None
         up_px, down_px = float(up_ask), float(down_ask)
-        if not (0.02 < up_px < 0.98 and 0.02 < down_px < 0.98):
+        if not (0.05 < up_px < 0.90 and 0.05 < down_px < 0.90):
             return None
         total = up_px + down_px
         effective_rate = self.fee_rate if fee_rate is None else float(fee_rate)
         fee = self._effective_fee(up_px, effective_rate, fee_exponent) + self._effective_fee(down_px, effective_rate, fee_exponent)
-        edge = 1.0 - total - fee - 0.0015
-        min_edge = 0.003 if self.degen else 0.006
-        if edge > min_edge:
+        edge = 1.0 - total - fee - 0.002
+        # Require at least 0.8¢ locked after fees. Rare but positive EV.
+        if edge > 0.008 and total < 0.96:
             return {
                 "type": "complete_set",
                 "edge": edge,
                 "up_price": up_px,
                 "down_price": down_px,
-                "score": 0.96 + min(0.03, edge * 10),
+                "score": 0.97,
                 "direction": "both",
                 "est_prob": None,
                 "pass": True,
             }
         return None
+
+    def late_winner(self, features: Dict, side: str) -> Dict:
+        """Buy the side that is already winning late in the window.
+        Requires price already >0.62, time left <100s, and spot moved in that direction.
+        """
+        entry = float(features.get("up_mid" if side == "up" else "down_mid") or 0.5)
+        remaining = float(features.get("time_remaining_s") or 999)
+        mom = float(features.get("momentum") or 0.0)
+        vs_open = float(features.get("vs_open") or 0.0)
+        if side == "down":
+            mom, vs_open = -mom, -vs_open
+        if remaining > 100 or remaining < 15:
+            return self._reject("late_too_early")
+        if entry < 0.62 or entry > 0.88:
+            return self._reject("late_price")
+        if mom < 0.15 and vs_open < 0.20:
+            return self._reject("late_no_confirm")
+        edge = (entry - 0.5) * 0.4  # rough: already-priced move has residual edge
+        if edge < 0.04:
+            return self._reject("late_edge")
+        return {
+            "direction": side,
+            "score": 0.70 + min(0.15, edge),
+            "edge": edge,
+            "entry": entry,
+            "pass": True,
+            "reason": "late_winner",
+        }
 
     def directional_score(self, features: Dict, preferred_side: Optional[str] = None,
                           calibrated_prob: Optional[float] = None) -> Dict:
