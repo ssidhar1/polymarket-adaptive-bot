@@ -784,6 +784,8 @@ def run_paper(config: dict):
                                     for lvl in levels:
                                         if not (0.03 < lvl < 0.97) or abs(mid - lvl) > 0.28:
                                             continue
+                                        if not risk.can_open(clip * skew, open_count=open_n):
+                                            continue
                                         ord_ = executor.place_maker_bid(tok, lvl, clip * skew, mid_id, mid)
                                         if ord_:
                                             meta = _timing_meta(m, feat, 0.5, 0.0, mom, regime, "maker")
