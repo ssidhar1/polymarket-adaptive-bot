@@ -758,9 +758,10 @@ def run_paper(config: dict):
                                 # Dynamic levels: cheap relative bids + high-side only when mid is already elevated
                                 # Inventory skew: reduce size on the side we already hold more of
                                 held = {"up": 0.0, "down": 0.0}
-                                for o in tracker.open_positions.values():
-                                    if o.get("market_id") == mid_id:
-                                        held[o.get("direction", "up")] = held.get(o.get("direction", "up"), 0) + float(o.get("size_usd") or 0)
+                                for pos in tracker.get_open_list():
+                                    if pos.market_id == mid_id:
+                                        d = pos.direction or "up"
+                                        held[d] = held.get(d, 0) + float(pos.size_usd or 0)
                                 remaining = float(feat_up.get("time_remaining_s") or 300)
                                 for side, tok, mid, feat in [("up", up_token, up_mid, feat_up), ("down", down_token, down_mid, feat_dn)]:
                                     mom_s = float(feat.get("momentum") or 0)
