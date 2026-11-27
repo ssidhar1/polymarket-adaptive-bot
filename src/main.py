@@ -376,6 +376,8 @@ def run_paper(config: dict):
     session_resolves = 0
     session_wins = 0
     session_pnl = 0.0
+    maker_fills = 0
+    maker_notional = 0.0
     cycles_since_proof = 0
 
     logger.info(
@@ -781,6 +783,8 @@ def run_paper(config: dict):
                                             open_n += 1
                                             trades_this_cycle += 1
                                             logger.info(f"MAKER GRID {side.upper()} | bid={lvl:.2f} | mid={mid:.2f} | skew={skew:.1f} | pair={pair_boost:.1f} | {slug[:28]}")
+                                            maker_fills += 1
+                                            maker_notional += float(ord_.get("size_usd") or 0)
                             # Skip taker paths when maker_only is on
                             continue
 
@@ -971,6 +975,7 @@ def run_paper(config: dict):
                     f"PROOF | session_pnl=${session_pnl:.2f} | bank_delta=${delta:.2f} | "
                     f"bank=${risk.bankroll:.2f} start=${session_start_bank:.2f} | "
                     f"resolves={session_resolves} wins={session_wins} wr={wr:.1%} | "
+                    f"maker_fills={maker_fills} maker_notional=${maker_notional:.0f} | "
                     f"uptime_h={uptime_h:.2f} | regime={learner.get_regime()} "
                     f"min_score={learner.get_min_score():.3f}"
                 )
