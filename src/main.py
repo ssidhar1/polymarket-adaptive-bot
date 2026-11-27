@@ -754,15 +754,21 @@ def run_paper(config: dict):
                                 for o in tracker.open_positions.values():
                                     if o.get("market_id") == mid_id:
                                         held[o.get("direction", "up")] = held.get(o.get("direction", "up"), 0) + float(o.get("size_usd") or 0)
+                                remaining = float(feat_up.get("time_remaining_s") or 300)
                                 for side, tok, mid, feat in [("up", up_token, up_mid, feat_up), ("down", down_token, down_mid, feat_dn)]:
                                     mom_s = float(feat.get("momentum") or 0)
+                                    opp = "down" if side == "up" else "up"
                                     # Skip quoting a side that is strongly against the short-term move
                                     if (side == "up" and mom_s < -0.012) or (side == "down" and mom_s > 0.012):
                                         continue
-                                    skew = 1.0 if held[side] < held.get("up" if side == "down" else "down", 0) + 2 else 0.55
-                                    # Cheap relative levels
-                                    levels = [round(max(0.04, mid - off), 3) for off in (0.04, 0.08, 0.14)]
-                                    # High-side resting only when mid is already high (late exit style)
+                                    # Pair-aware: if we already hold the opposite side, quote more aggressively to complete a set < 1.0
+                                    pair_boost = 1.0
+                                    if held[opp] > held[side] + 1.5:
+                                        pair_boost = 1.35
+                                    skew = (1.0 if held[side] < held[opp] + 2 else 0.55) * pair_boost
+                                    # Time boost near expiry on cheap relative levels
+                                    time_off = 0.02 if remaining < 90 else 0.0
+                                    levels = [round(max(0.04, mid - off - time_off), 3) for off in (0.04, 0.08, 0.14)]
                                     if mid > 0.72:
                                         levels += [round(min(0.96, mid - 0.03), 3), round(min(0.96, mid + 0.02), 3)]
                                     for lvl in levels:
@@ -774,7 +780,7 @@ def run_paper(config: dict):
                                             tracker.add(ord_, direction=side, slug=slug, end_date=m.get("endDate") or m.get("end_date_iso"), meta=meta)
                                             open_n += 1
                                             trades_this_cycle += 1
-                                            logger.info(f"MAKER GRID {side.upper()} | bid={lvl:.2f} | mid={mid:.2f} | skew={skew:.1f} | {slug[:28]}")
+                                            logger.info(f"MAKER GRID {side.upper()} | bid={lvl:.2f} | mid={mid:.2f} | skew={skew:.1f} | pair={pair_boost:.1f} | {slug[:28]}")
                             # Skip taker paths when maker_only is on
                             continue
 
