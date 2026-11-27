@@ -746,23 +746,35 @@ def run_paper(config: dict):
                         # Maker-only two-sided grid (primary path). Resting bids, hold to settle.
                         # Models the profitable high-volume maker wallets: zero fee, occasional cheap or late fills.
                         if config.get("execution", {}).get("maker_only", True):
-                            grid_levels = config.get("execution", {}).get("maker_grid", [0.08, 0.12, 0.18, 0.85, 0.92])
-                            clip = min(float(risk.bankroll) * 0.008, 4.0)
-                            if clip >= 0.8:
-                                for side, tok, mid in [("up", up_token, up_mid), ("down", down_token, down_mid)]:
-                                    for lvl in grid_levels:
-                                        if not (0.03 < lvl < 0.97):
+                            clip = min(float(risk.bankroll) * 0.007, 3.5)
+                            if clip >= 0.6:
+                                # Dynamic levels: cheap relative bids + high-side only when mid is already elevated
+                                # Inventory skew: reduce size on the side we already hold more of
+                                held = {"up": 0.0, "down": 0.0}
+                                for o in tracker.open_positions.values():
+                                    if o.get("market_id") == mid_id:
+                                        held[o.get("direction", "up")] = held.get(o.get("direction", "up"), 0) + float(o.get("size_usd") or 0)
+                                for side, tok, mid, feat in [("up", up_token, up_mid, feat_up), ("down", down_token, down_mid, feat_dn)]:
+                                    mom_s = float(feat.get("momentum") or 0)
+                                    # Skip quoting a side that is strongly against the short-term move
+                                    if (side == "up" and mom_s < -0.012) or (side == "down" and mom_s > 0.012):
+                                        continue
+                                    skew = 1.0 if held[side] < held.get("up" if side == "down" else "down", 0) + 2 else 0.55
+                                    # Cheap relative levels
+                                    levels = [round(max(0.04, mid - off), 3) for off in (0.04, 0.08, 0.14)]
+                                    # High-side resting only when mid is already high (late exit style)
+                                    if mid > 0.72:
+                                        levels += [round(min(0.96, mid - 0.03), 3), round(min(0.96, mid + 0.02), 3)]
+                                    for lvl in levels:
+                                        if not (0.03 < lvl < 0.97) or abs(mid - lvl) > 0.28:
                                             continue
-                                        # Only quote if the level is not already way through the mid
-                                        if abs(mid - lvl) > 0.35:
-                                            continue
-                                        ord_ = executor.place_maker_bid(tok, lvl, clip, mid_id, mid)
+                                        ord_ = executor.place_maker_bid(tok, lvl, clip * skew, mid_id, mid)
                                         if ord_:
-                                            meta = _timing_meta(m, feat_up, 0.5, 0.0, mom, regime, "maker")
+                                            meta = _timing_meta(m, feat, 0.5, 0.0, mom, regime, "maker")
                                             tracker.add(ord_, direction=side, slug=slug, end_date=m.get("endDate") or m.get("end_date_iso"), meta=meta)
                                             open_n += 1
                                             trades_this_cycle += 1
-                                            logger.info(f"MAKER GRID {side.upper()} | bid={lvl:.2f} | mid={mid:.2f} | size=${clip:.1f} | {slug[:28]}")
+                                            logger.info(f"MAKER GRID {side.upper()} | bid={lvl:.2f} | mid={mid:.2f} | skew={skew:.1f} | {slug[:28]}")
                             # Skip taker paths when maker_only is on
                             continue
 
