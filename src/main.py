@@ -748,6 +748,11 @@ def run_paper(config: dict):
                         # Maker-only two-sided grid (primary path). Resting bids, hold to settle.
                         # Models the profitable high-volume maker wallets: zero fee, occasional cheap or late fills.
                         if config.get("execution", {}).get("maker_only", True):
+                            # Only quote when both books are two-sided with real depth
+                            def _has_depth(b):
+                                return bool(b and b.get("bids") and b.get("asks") and len(b.get("bids") or []) >= 1 and len(b.get("asks") or []) >= 1)
+                            if not (_has_depth(book_up) and _has_depth(book_down)):
+                                continue
                             clip = min(float(risk.bankroll) * 0.007, 3.5)
                             if clip >= 0.6:
                                 # Dynamic levels: cheap relative bids + high-side only when mid is already elevated
